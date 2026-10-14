@@ -14,6 +14,7 @@ const MAX_VIDEO_SECONDS = 180; // matches the MVP spec (3-minute cap)
 // Find an ffmpeg binary: explicit env var, system PATH, or the one bundled with the imageio-ffmpeg Python package.
 function resolveFfmpeg() {
   const works = (bin) => { try { return spawnSync(bin, ['-version']).status === 0; } catch { return false; } };
+  if (process.env.FFMPEG && works(process.env.FFMPEG)) return process.env.FFMPEG;
   if (process.env.FFMPEG_PATH && works(process.env.FFMPEG_PATH)) return process.env.FFMPEG_PATH;
   if (works('ffmpeg')) return 'ffmpeg';
   try {
