@@ -30,6 +30,7 @@ async function requireAuth(req, res, next) {
       [token]
     );
     if (!user) return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+    if (user.suspended_at) return res.status(403).json({ error: 'Your account has been suspended.' });
     req.user = user;
     req.token = token;
     next();

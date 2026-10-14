@@ -137,6 +137,9 @@ auth.post('/login', loginLimiter, wrap(async (req, res) => {
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Incorrect username/email or password.' });
   }
+  if (user.suspended_at) {
+    return res.status(403).json({ error: 'Your account has been suspended.' });
+  }
   res.json({ token: await createSession(user.id), user: userPublic(user) });
 }));
 
@@ -558,6 +561,94 @@ api.post('/messages/:id', wrap(async (req, res) => {
   realtime.publish(members.map((m) => m.user_id), { type: 'message', conversationId: id });
   res.status(201).json({ id: row.id });
 }));
+
+// ----- Admin moderation tools -----
+function requireAdmin(req, res, next) {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+  next();
+}
+
+const admin = express.Router();
+admin.use(requireAdmin);
+
+admin.get('/reports', wrap(async (req, res) => {
+  const rows = await db.all(`
+    SELECT p.*, u.username, u.display_name, u.avatar_hue,
+      COUNT(r.reporter_id) AS report_count,
+      array_agg(r.reason ORDER BY r.created_at DESC) AS reasons,
+      MAX(r.created_at) AS latest_report_at
+    FROM posts p
+    JOIN users u ON u.id = p.user_id
+    JOIN reports r ON r.post_id = p.id
+    GROUP BY p.id, u.id
+    ORDER BY latest_report_at DESC, p.created_at DESC
+  `);
+  const reportsList = rows.map((r) => ({
+    id: r.id,
+    caption: r.caption,
+    mediaType: r.media_type,
+    mediaUrl: mediaUrl(r.media_url),
+    thumbUrl: mediaUrl(r.thumb_url),
+    status: r.status,
+    createdAt: r.created_at,
+    reportCount: Number(r.report_count),
+    reasons: Array.isArray(r.reasons) ? r.reasons : (r.reasons ? [r.reasons] : []),
+    author: {
+      id: r.user_id,
+      username: r.username,
+      displayName: r.display_name,
+      avatarHue: r.avatar_hue,
+    },
+    post: {
+      id: r.id,
+      caption: r.caption,
+      mediaType: r.media_type,
+      mediaUrl: mediaUrl(r.media_url),
+      thumbUrl: mediaUrl(r.thumb_url),
+      status: r.status,
+      createdAt: r.created_at,
+    },
+  }));
+  res.json({ reports: reportsList, posts: reportsList, items: reportsList });
+}));
+
+admin.post('/posts/:id/restore', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const post = await db.get('SELECT * FROM posts WHERE id = ?', [id]);
+  if (!post) return notFound(res, 'Post not found.');
+  await db.run("UPDATE posts SET status = 'published' WHERE id = ?", [id]);
+  await db.run('INSERT INTO admin_actions (admin_id, action, target) VALUES (?, ?, ?)', [me(req), 'restore', String(id)]);
+  res.json({ ok: true, status: 'published' });
+}));
+
+admin.post('/posts/:id/remove', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const post = await db.get('SELECT * FROM posts WHERE id = ?', [id]);
+  if (!post) return notFound(res, 'Post not found.');
+  await db.run("UPDATE posts SET status = 'hidden' WHERE id = ?", [id]);
+  await db.run('INSERT INTO admin_actions (admin_id, action, target) VALUES (?, ?, ?)', [me(req), 'remove', String(id)]);
+  res.json({ ok: true, status: 'hidden' });
+}));
+
+admin.post('/users/:username/suspend', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target) return notFound(res, 'User not found.');
+  await db.run('UPDATE users SET suspended_at = now() WHERE id = ?', [target.id]);
+  await db.run('INSERT INTO admin_actions (admin_id, action, target) VALUES (?, ?, ?)', [me(req), 'suspend', target.username]);
+  res.json({ ok: true, suspended: true });
+}));
+
+admin.post('/users/:username/unsuspend', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target) return notFound(res, 'User not found.');
+  await db.run('UPDATE users SET suspended_at = NULL WHERE id = ?', [target.id]);
+  await db.run('INSERT INTO admin_actions (admin_id, action, target) VALUES (?, ?, ?)', [me(req), 'unsuspend', target.username]);
+  res.json({ ok: true, suspended: false });
+}));
+
+api.use('/admin', admin);
 
 app.use('/api/auth', auth);
 app.use('/api', api);

@@ -6,7 +6,7 @@ const check = (n, ok, x = '') => {
 };
 
 async function j(path, { token, method = 'GET', body, form } = {}) {
-  const headers = {};
+  const headers = { 'X-Forwarded-For': '192.0.2.88' };
   if (token) headers.Authorization = `Bearer ${token}`;
   let payload;
   if (form) payload = form;
