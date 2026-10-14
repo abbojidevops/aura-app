@@ -218,11 +218,6 @@ CREATE TABLE IF NOT EXISTS admin_actions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions(created_at DESC);
-
-CREATE TABLE IF NOT EXISTS storage_cleanup (
-  post_id    TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL
-);
 `;
 
 // Creates tables once. The advisory lock keeps two starting instances from racing.

@@ -261,7 +261,19 @@ check('post media directory still exists before cleanup retry', fs.existsSync(sf
 const cleanupRow = await db.get('SELECT * FROM storage_cleanup WHERE post_id = ?', [String(sfPost.id)]);
 check('row exists in storage_cleanup for failed post', !!cleanupRow);
 
-// Retry queued post deletions (simulates startup retry)
+// Test wrapping/replacing storage.deletePost: if deletePost fails during retry, the row remains
+const originalDeletePost = storage.deletePost;
+storage.deletePost = async () => {
+  throw new Error('Simulated failure during retryCleanup');
+};
+await storage.retryCleanup();
+const cleanupRowStill = await db.get('SELECT * FROM storage_cleanup WHERE post_id = ?', [String(sfPost.id)]);
+check('row remains in storage_cleanup if deletePost throws during retry', !!cleanupRowStill);
+
+// Restore original storage.deletePost
+storage.deletePost = originalDeletePost;
+
+// Retry queued post deletions (simulates startup retry) - now succeeds
 await storage.retryCleanup();
 
 const cleanupRowAfter = await db.get('SELECT * FROM storage_cleanup WHERE post_id = ?', [String(sfPost.id)]);

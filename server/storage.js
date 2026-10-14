@@ -56,16 +56,8 @@ async function publishPost(postId) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-let _testFailPostId = null;
-function setTestFail(postId) {
-  _testFailPostId = postId ? String(postId) : null;
-}
-
 // Remove a post's files everywhere they might be.
 async function deletePost(postId) {
-  if (_testFailPostId && _testFailPostId === String(postId)) {
-    throw new Error(`Simulated deletePost failure for post ${postId}`);
-  }
   const dir = path.join(UPLOADS, 'posts', String(postId));
   if (fs.existsSync(dir)) {
     try {
@@ -100,7 +92,7 @@ async function retryCleanup() {
   const rows = await db.all('SELECT post_id FROM storage_cleanup');
   for (const row of rows) {
     try {
-      await deletePost(row.post_id);
+      await storage.deletePost(row.post_id);
       await db.run('DELETE FROM storage_cleanup WHERE post_id = ?', [row.post_id]);
     } catch (err) {
       console.error(`[storage-cleanup] retry delete post ${row.post_id}:`, err.message);
@@ -108,4 +100,5 @@ async function retryCleanup() {
   }
 }
 
-module.exports = { MODE, publishPost, deletePost, retryCleanup, setTestFail, UPLOADS };
+const storage = { MODE, publishPost, deletePost, retryCleanup, UPLOADS };
+module.exports = storage;
