@@ -11,6 +11,7 @@ const COPY = {
   like: { icon: Heart, text: 'liked your post' },
   comment: { icon: MessageCircle, text: 'commented on your post' },
   follow: { icon: UserPlus, text: 'started following you' },
+  follow_request: { icon: UserPlus, text: 'requested to follow you' },
 };
 
 export default function Notifications() {

@@ -168,6 +168,53 @@ api.patch('/me', wrap(async (req, res) => {
   res.json({ user: userPublic(updated) });
 }));
 
+api.get('/me/follow-requests', wrap(async (req, res) => {
+  const rows = await db.all(`
+    SELECT fr.created_at, u.id, u.username, u.display_name, u.avatar_hue, u.bio
+    FROM follow_requests fr
+    JOIN users u ON u.id = fr.requester_id
+    WHERE fr.target_id = ?
+    ORDER BY fr.created_at DESC`, [me(req)]);
+  const requests = rows.map((r) => ({
+    id: r.id,
+    username: r.username,
+    displayName: r.display_name,
+    avatarHue: r.avatar_hue,
+    bio: r.bio,
+    createdAt: r.created_at,
+    user: {
+      id: r.id,
+      username: r.username,
+      displayName: r.display_name,
+      avatarHue: r.avatar_hue,
+      bio: r.bio,
+    },
+  }));
+  res.json({ requests, items: requests });
+}));
+
+api.post('/me/follow-requests/:username/accept', wrap(async (req, res) => {
+  const requester = await findUserByUsername(req.params.username);
+  if (!requester) return notFound(res, 'Account not found.');
+  const fr = await db.get('SELECT 1 FROM follow_requests WHERE requester_id = ? AND target_id = ?', [requester.id, me(req)]);
+  if (!fr) return notFound(res, 'Follow request not found.');
+  await db.tx(async (t) => {
+    await t.run('DELETE FROM follow_requests WHERE requester_id = ? AND target_id = ?', [requester.id, me(req)]);
+    await t.run('INSERT INTO follows (follower_id, following_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [requester.id, me(req)]);
+    await t.run("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND actor_id = ? AND type = 'follow_request'", [me(req), requester.id]);
+  });
+  res.json({ ok: true, followed: true });
+}));
+
+api.post('/me/follow-requests/:username/decline', wrap(async (req, res) => {
+  const requester = await findUserByUsername(req.params.username);
+  if (!requester) return notFound(res, 'Account not found.');
+  const r = await db.run('DELETE FROM follow_requests WHERE requester_id = ? AND target_id = ?', [requester.id, me(req)]);
+  if (!r.changes) return notFound(res, 'Follow request not found.');
+  await db.run("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND actor_id = ? AND type = 'follow_request'", [me(req), requester.id]);
+  res.json({ ok: true });
+}));
+
 api.get('/me/export', wrap(async (req, res) => {
   const uid = me(req);
   const data = {
@@ -366,6 +413,7 @@ api.get('/users/:username', wrap(async (req, res) => {
   const isMe = user.id === viewer;
   const followed = !!(await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewer, user.id]));
   const locked = !!user.is_private && !isMe && !followed;
+  const requested = !followed && !!(await db.get('SELECT 1 FROM follow_requests WHERE requester_id = ? AND target_id = ?', [viewer, user.id]));
   let posts = [];
   if (!locked) {
     const statuses = isMe ? "('published','processing','hidden')" : "('published')";
@@ -377,7 +425,7 @@ api.get('/users/:username', wrap(async (req, res) => {
   }
   res.json({
     user: { ...userPublic(user), ...(await counts(user.id)) },
-    isMe, followed, locked, posts,
+    isMe, followed, locked, requested, posts,
   });
 }));
 
@@ -385,16 +433,28 @@ api.post('/users/:username/follow', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target) return notFound(res, 'Account not found.');
   if (target.id === me(req)) return bad(res, 'You cannot follow yourself.');
+
+  if (target.is_private) {
+    const already = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [me(req), target.id]);
+    if (already) {
+      return res.json({ followed: true, requested: false, followers: (await counts(target.id)).followers });
+    }
+    const r = await db.run('INSERT INTO follow_requests (requester_id, target_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [me(req), target.id]);
+    if (r.changes) await notify(target.id, me(req), 'follow_request', null);
+    return res.json({ followed: false, requested: true, followers: (await counts(target.id)).followers });
+  }
+
   const r = await db.run('INSERT INTO follows (follower_id, following_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [me(req), target.id]);
   if (r.changes) await notify(target.id, me(req), 'follow', null);
-  res.json({ followed: true, followers: (await counts(target.id)).followers });
+  res.json({ followed: true, requested: false, followers: (await counts(target.id)).followers });
 }));
 
 api.delete('/users/:username/follow', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target) return notFound(res, 'Account not found.');
   await db.run('DELETE FROM follows WHERE follower_id = ? AND following_id = ?', [me(req), target.id]);
-  res.json({ followed: false, followers: (await counts(target.id)).followers });
+  await db.run('DELETE FROM follow_requests WHERE requester_id = ? AND target_id = ?', [me(req), target.id]);
+  res.json({ followed: false, requested: false, followers: (await counts(target.id)).followers });
 }));
 
 api.get('/me/saved', wrap(async (req, res) => {

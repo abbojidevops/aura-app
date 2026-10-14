@@ -33,11 +33,11 @@ export default function Profile() {
   if (error) return <ErrorState message={error} onRetry={load} />;
   if (!data) return <div className="center-pad"><Spinner /></div>;
 
-  const { user, isMe, followed, locked } = data;
+  const { user, isMe, followed, locked, requested } = data;
 
   const toggleFollow = async () => {
     try {
-      await api(`/users/${username}/follow`, { method: followed ? 'DELETE' : 'POST' });
+      await api(`/users/${username}/follow`, { method: (followed || requested) ? 'DELETE' : 'POST' });
       load();
     } catch (err) {
       toast.show(err.message);
@@ -69,8 +69,8 @@ export default function Profile() {
                 </>
               ) : (
                 <>
-                  <button className={`btn btn--sm${followed ? '' : ' btn--primary'}`} onClick={toggleFollow}>
-                    {followed ? 'Following' : 'Follow'}
+                  <button className={`btn btn--sm${followed || requested ? '' : ' btn--primary'}`} onClick={toggleFollow}>
+                    {followed ? 'Following' : requested ? 'Requested' : 'Follow'}
                   </button>
                   <button className="btn btn--sm" onClick={message}><MessageCircle size={16} /> Message</button>
                 </>
