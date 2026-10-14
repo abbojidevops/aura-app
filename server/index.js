@@ -8,6 +8,8 @@ const express = require('express');
 const realtime = require('./realtime');
 const { mediaUrl, MEDIA_BASE } = require('./urls');
 const multer = require('multer');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 const db = require('./db');
 const { hashPassword, verifyPassword, createSession, requireAuth } = require('./auth');
 const media = require('./media');
@@ -52,6 +54,37 @@ const upload = multer({
 });
 
 const app = express();
+app.set('trust proxy', 1);
+
+const mediaSources = ["'self'", 'data:', 'blob:'];
+if (MEDIA_BASE) {
+  try {
+    const origin = new URL(MEDIA_BASE).origin;
+    if (!mediaSources.includes(origin)) mediaSources.push(origin);
+  } catch {
+    if (!mediaSources.includes(MEDIA_BASE)) mediaSources.push(MEDIA_BASE);
+  }
+}
+
+app.use(
+  helmet({
+    xContentTypeOptions: true,
+    referrerPolicy: { policy: 'no-referrer' },
+    xFrameOptions: { action: 'deny' },
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        imgSrc: mediaSources,
+        mediaSrc: mediaSources,
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        upgradeInsecureRequests: null,
+      },
+    },
+  })
+);
+
 app.use(express.json({ limit: '100kb' }));
 // Media files are named by post ID, and IDs are never reused, so they can be cached for a long time.
 // A CDN in front of this path caches them at the edge.
@@ -64,7 +97,20 @@ app.get('/healthz', wrap(async (req, res) => {
 // ---------- Auth (public) ----------
 const auth = express.Router();
 
-auth.post('/register', wrap(async (req, res) => {
+const createAuthLimiter = () =>
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { trustProxy: false, xForwardedForHeader: false },
+    handler: (req, res) => res.status(429).json({ error: 'Too many attempts. Try again later.' }),
+  });
+
+const registerLimiter = createAuthLimiter();
+const loginLimiter = createAuthLimiter();
+
+auth.post('/register', registerLimiter, wrap(async (req, res) => {
   const username = String(req.body?.username || '').trim().toLowerCase();
   const email = String(req.body?.email || '').trim();
   const password = String(req.body?.password || '');
@@ -84,7 +130,7 @@ auth.post('/register', wrap(async (req, res) => {
   }
 }));
 
-auth.post('/login', wrap(async (req, res) => {
+auth.post('/login', loginLimiter, wrap(async (req, res) => {
   const identifier = String(req.body?.identifier || '').trim();
   const password = String(req.body?.password || '');
   const user = await db.get('SELECT * FROM users WHERE username = lower(?) OR lower(email) = lower(?)', [identifier, identifier]);

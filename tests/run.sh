@@ -6,3 +6,4 @@ cd "$(dirname "$0")"
 node mood.mjs
 node ws.cjs
 node e2e.mjs
+node security.mjs
