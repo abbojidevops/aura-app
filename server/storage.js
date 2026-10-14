@@ -6,6 +6,7 @@
 // MEDIA_BASE_URL (the bucket's public URL or a CDN in front of it).
 const fs = require('fs');
 const path = require('path');
+const db = require('./db');
 
 const UPLOADS = path.join(__dirname, '..', 'uploads');
 const MODE = (process.env.STORAGE || 'local').toLowerCase();
@@ -55,8 +56,16 @@ async function publishPost(postId) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+let _testFailPostId = null;
+function setTestFail(postId) {
+  _testFailPostId = postId ? String(postId) : null;
+}
+
 // Remove a post's files everywhere they might be.
 async function deletePost(postId) {
+  if (_testFailPostId && _testFailPostId === String(postId)) {
+    throw new Error(`Simulated deletePost failure for post ${postId}`);
+  }
   const dir = path.join(UPLOADS, 'posts', String(postId));
   if (fs.existsSync(dir)) {
     try {
@@ -70,6 +79,7 @@ async function deletePost(postId) {
         fs.rmdirSync(dir);
       } catch (err) {
         console.error(`[storage] delete post ${postId}: ${err.message}`);
+        throw err;
       }
     }
   }
@@ -85,4 +95,17 @@ async function deletePost(postId) {
   } while (token);
 }
 
-module.exports = { MODE, publishPost, deletePost, UPLOADS };
+// Retries queued post deletions from storage_cleanup table.
+async function retryCleanup() {
+  const rows = await db.all('SELECT post_id FROM storage_cleanup');
+  for (const row of rows) {
+    try {
+      await deletePost(row.post_id);
+      await db.run('DELETE FROM storage_cleanup WHERE post_id = ?', [row.post_id]);
+    } catch (err) {
+      console.error(`[storage-cleanup] retry delete post ${row.post_id}:`, err.message);
+    }
+  }
+}
+
+module.exports = { MODE, publishPost, deletePost, retryCleanup, setTestFail, UPLOADS };

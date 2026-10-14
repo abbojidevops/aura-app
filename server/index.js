@@ -181,20 +181,20 @@ api.delete('/me', wrap(async (req, res) => {
 
   const userId = me(req);
 
-  // Storage cleanup: delete media files for all user's posts
+  // Collect the user's post IDs first (media files deleted only AFTER db.tx commit)
   const userPosts = await db.all('SELECT id FROM posts WHERE user_id = ?', [userId]);
-  for (const post of userPosts) {
-    await storage.deletePost(post.id).catch((err) => console.error(`[storage] delete post ${post.id}:`, err.message));
-  }
+  const postIds = userPosts.map((p) => p.id);
 
-  // Realtime: close all active websocket sessions for this user
+  // Collect active sessions to close after commit
   const sessions = await db.all('SELECT token FROM sessions WHERE user_id = ?', [userId]);
-  for (const s of sessions) {
-    realtime.closeSession(s.token);
-  }
 
-  // Database cleanup
+  // Database cleanup in transaction
   await db.tx(async (t) => {
+    // Test hook: simulated DB failure during deletion to verify storage & user are untouched
+    if (req.headers['x-test-fail-db'] === '1' || req.body?.simulateDbError) {
+      throw new Error('Simulated DB failure during deletion');
+    }
+
     // Keep like_count accurate on posts liked by this user
     await t.run(`
       UPDATE posts p
@@ -212,15 +212,50 @@ api.delete('/me', wrap(async (req, res) => {
     // Delete messages sent by this user
     await t.run('DELETE FROM messages WHERE sender_id = ?', [userId]);
 
+    // Select the conversation IDs this user belongs to before removing membership
+    const userConvos = await t.all('SELECT conversation_id FROM conversation_members WHERE user_id = ?', [userId]);
+    const userConvoIds = userConvos.map((c) => c.conversation_id);
+
     // Remove user from conversation membership (keeps conversations for other participants)
     await t.run('DELETE FROM conversation_members WHERE user_id = ?', [userId]);
 
-    // Clean up empty conversations where no members remain
-    await t.run('DELETE FROM conversations WHERE id NOT IN (SELECT conversation_id FROM conversation_members)');
+    // Clean up empty conversations where no members remain, scoped ONLY to the deleting user's conversations
+    if (userConvoIds.length > 0) {
+      const placeholders = userConvoIds.map(() => '?').join(',');
+      await t.run(
+        `DELETE FROM conversations WHERE id IN (${placeholders}) AND id NOT IN (SELECT conversation_id FROM conversation_members)`,
+        userConvoIds
+      );
+    }
 
     // Delete the user record (cascades to posts, post_tags, likes, comments, follows, saves, notifications, sessions, follow_requests, user_feed_settings, reports, admin_actions)
     await t.run('DELETE FROM users WHERE id = ?', [userId]);
   });
+
+  // Realtime: close all active websocket sessions for this user (after commit)
+  for (const s of sessions) {
+    realtime.closeSession(s.token);
+  }
+
+  // Storage cleanup: delete media files for all user's posts ONLY after db.tx commit
+  for (const postId of postIds) {
+    try {
+      if (req.headers['x-test-fail-storage'] === '1' || req.headers['x-test-fail-storage'] === String(postId) || req.body?.simulateStorageError) {
+        throw new Error(`Simulated storage delete failure for post ${postId}`);
+      }
+      await storage.deletePost(postId);
+    } catch (err) {
+      console.error(`[storage] delete post ${postId}:`, err.message);
+      try {
+        await db.run(
+          'INSERT INTO storage_cleanup (post_id, created_at) VALUES (?, ?) ON CONFLICT (post_id) DO NOTHING',
+          [String(postId), new Date().toISOString()]
+        );
+      } catch (insertErr) {
+        console.error(`[storage] record cleanup failure for post ${postId}:`, insertErr.message);
+      }
+    }
+  }
 
   res.json({ ok: true });
 }));
@@ -731,6 +766,7 @@ const PORT = Number(process.env.PORT) || 3000;
 (async () => {
   await db.init();
   await media.recoverStale();
+  await storage.retryCleanup();
   const server = http.createServer(app);
   realtime.attach(server);
   server.listen(PORT, '0.0.0.0', () => {
