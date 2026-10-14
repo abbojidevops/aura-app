@@ -79,9 +79,12 @@ const POSTS = [
   { author: 'typeology', kind: 'video', color: ['0xec4899', '0x6366f1'], caption: 'Glass morphism in 15 seconds. Blur, border, light. #design #glassmorphism #uidesign', hours: 8 },
 ];
 
+// Set to true once seeding has finished (or was skipped because data already exists).
+const state = { done: false };
+
 async function seedIfEmpty() {
   const { n } = await db.get('SELECT COUNT(*) AS n FROM users');
-  if (n > 0) return;
+  if (n > 0) { state.done = true; return; }
   console.log('[seed] creating demo data…');
   fs.mkdirSync(TMP, { recursive: true });
 
@@ -135,7 +138,8 @@ async function seedIfEmpty() {
     }
     await db.run('UPDATE posts SET like_count = (SELECT COUNT(*) FROM likes WHERE post_id = ?) WHERE id = ?', [post.id, post.id]);
   }
+  state.done = true;
   console.log('[seed] done. Sign in with username "demo" and password "demo1234".');
 }
 
-module.exports = { seedIfEmpty };
+module.exports = { seedIfEmpty, state };

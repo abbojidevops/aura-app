@@ -91,7 +91,9 @@ app.use(express.json({ limit: '100kb' }));
 app.use('/uploads', express.static(media.UPLOADS, { maxAge: '30d', immutable: true, etag: true }));
 app.get('/healthz', wrap(async (req, res) => {
   await db.get('SELECT 1 AS ok');
-  res.json({ ok: true, realtime: '/ws', media: MEDIA_BASE || 'local' });
+  // ready: seeding finished and no media jobs are pending. Test harnesses and deploy checks wait for this.
+  const ready = require('./seed').state.done && media.idle();
+  res.json({ ok: true, ready, realtime: '/ws', media: MEDIA_BASE || 'local' });
 }));
 
 // ---------- Auth (public) ----------

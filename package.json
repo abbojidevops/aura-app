@@ -6,7 +6,8 @@
     "build": "vite build --config client/vite.config.js",
     "start": "node server/index.js",
     "dev:api": "node server/index.js",
-    "test": "bash tests/run.sh"
+    "test": "bash tests/run.sh",
+    "pretest": "npm run build"
   },
   "keywords": [],
   "author": "",

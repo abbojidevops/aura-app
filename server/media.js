@@ -31,6 +31,8 @@ const hasFfmpeg = resolveFfmpeg() !== null;
 const queue = [];
 let running = false;
 function enqueue(job) { queue.push(job); drain(); }
+// True when no media job is queued or running.
+function idle() { return !running && queue.length === 0; }
 async function drain() {
   if (running) return;
   running = true;
@@ -130,4 +132,4 @@ async function recoverStale() {
   await db.run("UPDATE posts SET status = 'failed' WHERE status = 'processing'");
 }
 
-module.exports = { enqueueProcessing, recoverStale, hasFfmpeg, FFMPEG, UPLOADS };
+module.exports = { enqueueProcessing, recoverStale, idle, hasFfmpeg, FFMPEG, UPLOADS };
