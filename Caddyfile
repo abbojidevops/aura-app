@@ -1,0 +1,6 @@
+# HTTPS for the AURA alpha. DOMAIN comes from .env.
+# Caddy obtains and renews certificates and proxies WebSocket upgrades on /ws without extra config.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

@@ -1,0 +1,12 @@
+node_modules/
+client/dist/
+data/
+uploads/
+*.db-wal
+*.db-shm
+.env
+
+# local-only
+node_modules/
+.env
+*.sqlite.bak
