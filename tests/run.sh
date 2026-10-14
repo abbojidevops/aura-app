@@ -8,4 +8,5 @@ node ws.cjs
 node e2e.mjs
 node follow_requests.mjs
 node admin.mjs
+node delete_account.mjs
 node security.mjs

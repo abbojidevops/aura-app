@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const sharp = require('sharp');
+sharp.cache(false);
 const db = require('./db');
 const storage = require('./storage');
 
@@ -64,9 +65,8 @@ async function processImage(postId, src) {
   fs.mkdirSync(dir, { recursive: true });
   const feedPath = path.join(dir, 'feed.webp');
   const thumbPath = path.join(dir, 'thumb.webp');
-  await sharp(src).rotate().resize({ width: 1080, withoutEnlargement: true }).webp({ quality: 82 }).toFile(feedPath);
+  const meta = await sharp(src).rotate().resize({ width: 1080, withoutEnlargement: true }).webp({ quality: 82 }).toFile(feedPath);
   await sharp(src).rotate().resize({ width: 480, height: 480, fit: 'cover' }).webp({ quality: 75 }).toFile(thumbPath);
-  const meta = await sharp(feedPath).metadata();
   return {
     mediaUrl: `/uploads/posts/${postId}/feed.webp`,
     thumbUrl: `/uploads/posts/${postId}/thumb.webp`,

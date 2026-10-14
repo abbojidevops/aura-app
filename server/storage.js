@@ -57,7 +57,22 @@ async function publishPost(postId) {
 
 // Remove a post's files everywhere they might be.
 async function deletePost(postId) {
-  fs.rmSync(path.join(UPLOADS, 'posts', String(postId)), { recursive: true, force: true });
+  const dir = path.join(UPLOADS, 'posts', String(postId));
+  if (fs.existsSync(dir)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      try {
+        const files = fs.readdirSync(dir);
+        for (const file of files) {
+          fs.rmSync(path.join(dir, file), { force: true });
+        }
+        fs.rmdirSync(dir);
+      } catch (err) {
+        console.error(`[storage] delete post ${postId}: ${err.message}`);
+      }
+    }
+  }
   if (MODE !== 's3') return;
   const { ListObjectsV2Command, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
   const prefix = `uploads/posts/${postId}/`;

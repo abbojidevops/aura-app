@@ -171,6 +171,58 @@ api.patch('/me', wrap(async (req, res) => {
   res.json({ user: userPublic(updated) });
 }));
 
+api.delete('/me', wrap(async (req, res) => {
+  const password = String(req.body?.password || '');
+  if (!password || !verifyPassword(password, req.user.password_hash)) {
+    return res.status(401).json({ error: 'Incorrect password.' });
+  }
+
+  const userId = me(req);
+
+  // Storage cleanup: delete media files for all user's posts
+  const userPosts = await db.all('SELECT id FROM posts WHERE user_id = ?', [userId]);
+  for (const post of userPosts) {
+    await storage.deletePost(post.id).catch((err) => console.error(`[storage] delete post ${post.id}:`, err.message));
+  }
+
+  // Realtime: close all active websocket sessions for this user
+  const sessions = await db.all('SELECT token FROM sessions WHERE user_id = ?', [userId]);
+  for (const s of sessions) {
+    realtime.closeSession(s.token);
+  }
+
+  // Database cleanup
+  await db.tx(async (t) => {
+    // Keep like_count accurate on posts liked by this user
+    await t.run(`
+      UPDATE posts p
+      SET like_count = GREATEST(like_count - 1, 0)
+      WHERE p.user_id != ? AND p.id IN (SELECT post_id FROM likes WHERE user_id = ?)
+    `, [userId, userId]);
+
+    // Keep comment_count accurate on posts commented on by this user
+    await t.run(`
+      UPDATE posts p
+      SET comment_count = (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.user_id != ?)
+      WHERE p.user_id != ? AND p.id IN (SELECT post_id FROM comments WHERE user_id = ?)
+    `, [userId, userId, userId]);
+
+    // Delete messages sent by this user
+    await t.run('DELETE FROM messages WHERE sender_id = ?', [userId]);
+
+    // Remove user from conversation membership (keeps conversations for other participants)
+    await t.run('DELETE FROM conversation_members WHERE user_id = ?', [userId]);
+
+    // Clean up empty conversations where no members remain
+    await t.run('DELETE FROM conversations WHERE id NOT IN (SELECT conversation_id FROM conversation_members)');
+
+    // Delete the user record (cascades to posts, post_tags, likes, comments, follows, saves, notifications, sessions, follow_requests, user_feed_settings, reports, admin_actions)
+    await t.run('DELETE FROM users WHERE id = ?', [userId]);
+  });
+
+  res.json({ ok: true });
+}));
+
 api.get('/me/follow-requests', wrap(async (req, res) => {
   const rows = await db.all(`
     SELECT fr.created_at, u.id, u.username, u.display_name, u.avatar_hue, u.bio
@@ -501,14 +553,16 @@ api.get('/messages', wrap(async (req, res) => {
       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.id > cm.last_read_id AND m.sender_id != @me) AS unread
     FROM conversation_members cm
     JOIN conversations c ON c.id = cm.conversation_id
-    JOIN conversation_members cm2 ON cm2.conversation_id = c.id AND cm2.user_id != @me
-    JOIN users u ON u.id = cm2.user_id
+    LEFT JOIN conversation_members cm2 ON cm2.conversation_id = c.id AND cm2.user_id != @me
+    LEFT JOIN users u ON u.id = cm2.user_id
     WHERE cm.user_id = @me
     ORDER BY last_at DESC NULLS LAST`, { me: me(req) });
   res.json({
     conversations: rows.map((r) => ({
       id: r.id, lastBody: r.last_body, lastAt: r.last_at, unread: r.unread,
-      user: { id: r.uid, username: r.username, displayName: r.display_name, avatarHue: r.avatar_hue },
+      user: r.uid
+        ? { id: r.uid, username: r.username, displayName: r.display_name, avatarHue: r.avatar_hue }
+        : { id: null, username: 'deleted', displayName: 'Deleted account', avatarHue: 260 },
     })),
   });
 }));
