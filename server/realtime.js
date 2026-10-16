@@ -20,24 +20,47 @@ function attach(server) {
     ws.on('pong', () => { ws.isAlive = true; });
 
     ws.on('message', async (raw) => {
-      if (entry) return; // only auth messages are expected after connect
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return ws.close(4400, 'bad message'); }
-      if (msg?.type !== 'auth' || typeof msg.token !== 'string') return ws.close(4400, 'auth required');
-      try {
-        const user = await db.get(
-          'SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?',
-          [msg.token]
-        );
-        if (!user) return ws.close(4401, 'unauthorized');
-        clearTimeout(authTimer);
-        entry = { ws, token: msg.token };
-        if (!clients.has(user.id)) clients.set(user.id, new Set());
-        clients.get(user.id).add(entry);
-        ws.userId = user.id;
-        ws.send(JSON.stringify({ type: 'ready' }));
-      } catch {
-        ws.close(1011, 'server error');
+
+      if (!entry) {
+        if (msg?.type !== 'auth' || typeof msg.token !== 'string') return ws.close(4400, 'auth required');
+        try {
+          const user = await db.get(
+            'SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?',
+            [msg.token]
+          );
+          if (!user) return ws.close(4401, 'unauthorized');
+          clearTimeout(authTimer);
+          entry = { ws, token: msg.token };
+          if (!clients.has(user.id)) clients.set(user.id, new Set());
+          clients.get(user.id).add(entry);
+          ws.userId = user.id;
+          ws.send(JSON.stringify({ type: 'ready' }));
+        } catch {
+          ws.close(1011, 'server error');
+        }
+        return;
+      }
+
+      // Already authenticated messages:
+      if (msg?.type === 'typing') {
+        const convoId = Number(msg.conversationId);
+        if (!convoId) return;
+        try {
+          const isMember = await db.get(
+            'SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+            [convoId, ws.userId]
+          );
+          if (!isMember) return;
+          const others = await db.all(
+            'SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id != ?',
+            [convoId, ws.userId]
+          );
+          publish(others.map((o) => o.user_id), { type: 'typing', conversationId: convoId, userId: ws.userId });
+        } catch {
+          // ignore transient error
+        }
       }
     });
 

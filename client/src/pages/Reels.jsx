@@ -123,7 +123,15 @@ export default function Reels() {
       <Sheet open={!!commentsFor} onClose={() => setCommentsFor(null)} title={commentsFor ? `Comments · ${formatCount(commentsFor.commentCount)}` : 'Comments'}>
         {commentsFor && (
           <>
-            <CommentList key={`${commentsFor.id}-${commentsKey}`} postId={commentsFor.id} />
+            <CommentList
+              key={`${commentsFor.id}-${commentsKey}`}
+              postId={commentsFor.id}
+              postAuthorId={commentsFor.author?.id}
+              onCountChange={(count) => {
+                feed.patch(commentsFor.id, { commentCount: count });
+                setCommentsFor((c) => ({ ...c, commentCount: count }));
+              }}
+            />
             <CommentComposer postId={commentsFor.id} onPosted={() => {
               feed.patch(commentsFor.id, { commentCount: commentsFor.commentCount + 1 });
               setCommentsFor((c) => ({ ...c, commentCount: c.commentCount + 1 }));

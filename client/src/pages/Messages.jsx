@@ -5,7 +5,7 @@ import { Send, MessageCircle } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { EmptyState, Spinner } from '../components/Feedback.jsx';
 import { api } from '../lib/api';
-import { subscribeRealtime, useRealtimeLive } from '../lib/realtime';
+import { subscribeRealtime, useRealtimeLive, sendRealtime } from '../lib/realtime';
 import { timeAgo } from '../lib/format';
 import { useToast } from '../lib/context.jsx';
 
@@ -99,6 +99,10 @@ function Thread({ id, other }) {
   const lastId = useRef(0);
   const list = useRef(null);
 
+  const [otherTyping, setOtherTyping] = useState(false);
+  const typingTimer = useRef(null);
+  const lastTypingSent = useRef(0);
+
   const fetchNew = useCallback(async () => {
     const d = await api(`/messages/${id}?after=${lastId.current}`);
     if (d.messages.length) {
@@ -117,12 +121,29 @@ function Thread({ id, other }) {
   }, [fetchNew, live]);
 
   useEffect(() => subscribeRealtime((m) => {
-    if (m.type === 'message' && String(m.conversationId) === String(id)) fetchNew().catch(() => {});
-  }), [fetchNew, id]);
+    if (m.type === 'message' && String(m.conversationId) === String(id)) {
+      setOtherTyping(false);
+      fetchNew().catch(() => {});
+    }
+    if (m.type === 'typing' && String(m.conversationId) === String(id) && m.userId === other.id) {
+      setOtherTyping(true);
+      clearTimeout(typingTimer.current);
+      typingTimer.current = setTimeout(() => setOtherTyping(false), 3500);
+    }
+  }), [fetchNew, id, other.id]);
 
   useEffect(() => {
     list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' });
-  }, [messages.length]);
+  }, [messages.length, otherTyping]);
+
+  const handleInputChange = (e) => {
+    setText(e.target.value);
+    const now = Date.now();
+    if (now - lastTypingSent.current > 2000) {
+      lastTypingSent.current = now;
+      sendRealtime({ type: 'typing', conversationId: Number(id) });
+    }
+  };
 
   const send = async (e) => {
     e?.preventDefault();
@@ -148,7 +169,10 @@ function Thread({ id, other }) {
         <button className="icon-btn thread__back" onClick={() => navigate('/messages')} aria-label="Back to conversations">←</button>
         <Link to={`/u/${other.username}`} className="thread__who">
           <Avatar user={other} size={36} />
-          <span className="strong">{other.displayName}</span>
+          <div>
+            <span className="strong block">{other.displayName}</span>
+            {otherTyping && <span className="muted small typing-status">typing…</span>}
+          </div>
         </Link>
       </header>
 
@@ -162,11 +186,20 @@ function Thread({ id, other }) {
             </div>
           </div>
         ))}
+        {otherTyping && (
+          <div className="bubble-row fade-up">
+            <div className="bubble bubble--typing">
+              <span className="dots-typing">
+                <span /><span /><span />
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       <form className="thread__composer" onSubmit={send}>
         <label className="sr-only" htmlFor="message-input">Message</label>
-        <input id="message-input" className="input" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} placeholder="Message…" />
+        <input id="message-input" className="input" value={text} maxLength={1000} onChange={handleInputChange} placeholder="Message…" />
         <button className="btn btn--primary btn--icon" disabled={!text.trim()} aria-label="Send message"><Send size={18} /></button>
       </form>
     </div>

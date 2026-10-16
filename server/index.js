@@ -42,6 +42,7 @@ async function counts(userId) {
 async function notify(recipientId, actorId, type, postId, conn = db) {
   if (recipientId === actorId) return;
   await conn.run('INSERT INTO notifications (user_id, actor_id, type, post_id) VALUES (?, ?, ?, ?)', [recipientId, actorId, type, postId ?? null]);
+  realtime.publish([recipientId], { type: 'notification' });
 }
 
 function findUserByUsername(username) {
@@ -404,7 +405,24 @@ api.get('/explore', wrap(async (req, res) => {
       SELECT pt.tag AS tag, COUNT(*) AS count FROM post_tags pt JOIN posts p ON p.id = pt.post_id
       WHERE p.status = 'published' AND p.created_at >= now() - interval '7 days'
       GROUP BY pt.tag ORDER BY count DESC, pt.tag LIMIT 12`);
-    return res.json({ users: [], posts: trending, tags });
+    const suggested = await db.all(`
+      SELECT u.id, u.username, u.display_name, u.avatar_hue, u.bio,
+        (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS followers
+      FROM users u
+      WHERE u.id != @me
+        AND u.suspended_at IS NULL
+        AND u.id NOT IN (SELECT following_id FROM follows WHERE follower_id = @me)
+      ORDER BY followers DESC, u.id DESC
+      LIMIT 8`, { me: me(req) });
+    const suggestedUsers = suggested.map((u) => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      avatarHue: u.avatar_hue,
+      bio: u.bio,
+      followers: u.followers,
+    }));
+    return res.json({ users: [], posts: trending, tags, suggestedUsers });
   }
   const like = `%${raw.replace(/[%_]/g, '')}%`;
   const tag = raw.replace(/^#/, '').toLowerCase();
@@ -461,6 +479,25 @@ api.delete('/posts/:id', wrap(async (req, res) => {
   await db.run('DELETE FROM posts WHERE id = ?', [id]);
   await storage.deletePost(id).catch((err) => console.error(`[storage] delete post ${id}: ${err.message}`));
   res.json({ ok: true });
+}));
+
+api.patch('/posts/:id', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const row = await db.get('SELECT user_id FROM posts WHERE id = ?', [id]);
+  if (!row) return notFound(res, 'Post not found.');
+  if (row.user_id !== me(req)) return res.status(403).json({ error: 'You can only edit your own posts.' });
+  const caption = String(req.body?.caption ?? '').slice(0, 2200);
+
+  await db.tx(async (t) => {
+    await t.run('UPDATE posts SET caption = ? WHERE id = ?', [caption, id]);
+    await t.run('DELETE FROM post_tags WHERE post_id = ?', [id]);
+    for (const tag of extractTags(caption)) {
+      await t.run('INSERT INTO post_tags (post_id, tag) VALUES (?, ?) ON CONFLICT DO NOTHING', [id, tag]);
+    }
+  });
+
+  const post = await getVisiblePost(me(req), id);
+  res.json({ post: serializePost(post) });
 }));
 
 api.post('/posts/:id/like', wrap(async (req, res) => {
@@ -529,6 +566,26 @@ api.post('/posts/:id/comments', wrap(async (req, res) => {
   res.status(201).json({ ok: true });
 }));
 
+api.delete('/posts/:id/comments/:commentId', wrap(async (req, res) => {
+  const postId = Number(req.params.id);
+  const commentId = Number(req.params.commentId);
+  const comment = await db.get('SELECT id, user_id, post_id FROM comments WHERE id = ? AND post_id = ?', [commentId, postId]);
+  if (!comment) return notFound(res, 'Comment not found.');
+  const post = await db.get('SELECT user_id FROM posts WHERE id = ?', [postId]);
+  if (!post) return notFound(res, 'Post not found.');
+
+  if (comment.user_id !== me(req) && post.user_id !== me(req)) {
+    return res.status(403).json({ error: 'You cannot delete this comment.' });
+  }
+
+  await db.tx(async (t) => {
+    await t.run('DELETE FROM comments WHERE id = ?', [commentId]);
+    await t.run('UPDATE posts SET comment_count = GREATEST(comment_count - 1, 0) WHERE id = ?', [postId]);
+  });
+
+  res.json({ ok: true });
+}));
+
 // Reports: three distinct reports automatically hide a post pending human review.
 api.post('/posts/:id/report', wrap(async (req, res) => {
   const id = Number(req.params.id);
@@ -594,13 +651,64 @@ api.delete('/users/:username/follow', wrap(async (req, res) => {
   res.json({ followed: false, requested: false, followers: (await counts(target.id)).followers });
 }));
 
-api.get('/me/saved', wrap(async (req, res) => {
-  const rows = await db.all(`${POST_SELECT}
-    JOIN saves s ON s.post_id = p.id AND s.user_id = @me
-    WHERE p.status = 'published' AND ${VISIBLE}
-    ORDER BY s.created_at DESC LIMIT 60`, { me: me(req) });
-  await attachTags(rows);
-  res.json({ posts: rows.map(serializePost) });
+api.get('/users/:username/followers', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target || target.suspended_at) return notFound(res, 'Account not found.');
+  const viewerId = me(req);
+  if (target.is_private && target.id !== viewerId) {
+    const isFollowing = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewerId, target.id]);
+    if (!isFollowing) return res.status(403).json({ error: 'This account is private.' });
+  }
+  const rows = await db.all(`
+    SELECT u.id, u.username, u.display_name, u.avatar_hue, u.bio,
+      EXISTS(SELECT 1 FROM follows WHERE follower_id = @me AND following_id = u.id) AS followed,
+      EXISTS(SELECT 1 FROM follow_requests WHERE requester_id = @me AND target_id = u.id) AS requested
+    FROM follows f
+    JOIN users u ON u.id = f.follower_id
+    WHERE f.following_id = @targetId AND u.suspended_at IS NULL
+    ORDER BY f.created_at DESC LIMIT 100`, { me: viewerId, targetId: target.id });
+  res.json({
+    users: rows.map((r) => ({
+      id: r.id,
+      username: r.username,
+      displayName: r.display_name,
+      avatarHue: r.avatar_hue,
+      bio: r.bio,
+      followed: !!r.followed,
+      requested: !!r.requested,
+      isMe: r.id === viewerId,
+    })),
+  });
+}));
+
+api.get('/users/:username/following', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target || target.suspended_at) return notFound(res, 'Account not found.');
+  const viewerId = me(req);
+  if (target.is_private && target.id !== viewerId) {
+    const isFollowing = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewerId, target.id]);
+    if (!isFollowing) return res.status(403).json({ error: 'This account is private.' });
+  }
+  const rows = await db.all(`
+    SELECT u.id, u.username, u.display_name, u.avatar_hue, u.bio,
+      EXISTS(SELECT 1 FROM follows WHERE follower_id = @me AND following_id = u.id) AS followed,
+      EXISTS(SELECT 1 FROM follow_requests WHERE requester_id = @me AND target_id = u.id) AS requested
+    FROM follows f
+    JOIN users u ON u.id = f.following_id
+    WHERE f.follower_id = @targetId AND u.suspended_at IS NULL
+    ORDER BY f.created_at DESC LIMIT 100`, { me: viewerId, targetId: target.id });
+  res.json({
+    users: rows.map((r) => ({
+      id: r.id,
+      username: r.username,
+      displayName: r.display_name,
+      avatarHue: r.avatar_hue,
+      bio: r.bio,
+      followed: !!r.followed,
+      requested: !!r.requested,
+      isMe: r.id === viewerId,
+    })),
+  });
 }));
 
 // ----- Notifications -----

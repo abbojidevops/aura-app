@@ -1,7 +1,6 @@
-// The feed card: author, media, actions, counts, caption, and "Why am I seeing this?" transparency.
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Link as LinkIcon, Info } from 'lucide-react';
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
@@ -18,6 +17,9 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editCaption, setEditCaption] = useState(post.caption || '');
+  const [busyEdit, setBusyEdit] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
   const [liking, setLiking] = useState(false);
   const isMine = user && post.author.id === user.id;
@@ -48,6 +50,27 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
       onDeleted?.(post.id);
     } catch (err) {
       toast.show(err.message);
+    }
+  };
+
+  const startEdit = () => {
+    setEditCaption(post.caption || '');
+    setMenuOpen(false);
+    setEditOpen(true);
+  };
+
+  const saveCaption = async (e) => {
+    e.preventDefault();
+    setBusyEdit(true);
+    try {
+      const res = await api(`/posts/${post.id}`, { method: 'PATCH', body: { caption: editCaption } });
+      patch?.({ caption: res.post.caption, tags: res.post.tags });
+      setEditOpen(false);
+      toast.show('Caption updated');
+    } catch (err) {
+      toast.show(err.message);
+    } finally {
+      setBusyEdit(false);
     }
   };
 
@@ -113,9 +136,26 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title="Post options">
         <div className="menu">
           <button className="menu__item" onClick={() => { setMenuOpen(false); sharePost(post, toast); }}><LinkIcon size={18} /> Copy link</button>
+          {isMine && <button className="menu__item" onClick={startEdit}><Edit3 size={18} /> Edit caption</button>}
           {!isMine && <button className="menu__item" onClick={() => { setMenuOpen(false); setReportOpen(true); }}><Flag size={18} /> Report</button>}
           {isMine && <button className="menu__item menu__item--danger" onClick={remove}><Trash2 size={18} /> Delete post</button>}
         </div>
+      </Sheet>
+      <Sheet open={editOpen} onClose={() => setEditOpen(false)} title="Edit caption">
+        <form className="stack" onSubmit={saveCaption}>
+          <textarea
+            className="input"
+            rows={4}
+            value={editCaption}
+            maxLength={2200}
+            onChange={(e) => setEditCaption(e.target.value)}
+            placeholder="Write a caption…"
+          />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn--sm" onClick={() => setEditOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn--primary btn--sm" disabled={busyEdit}>{busyEdit ? 'Saving…' : 'Save'}</button>
+          </div>
+        </form>
       </Sheet>
       <Sheet open={reportOpen} onClose={() => setReportOpen(false)} title="Why are you reporting this?">
         <div className="menu">

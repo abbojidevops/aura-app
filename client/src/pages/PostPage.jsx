@@ -38,7 +38,12 @@ export default function PostPage() {
       />
       <section className="card comments-card" aria-label="Comments">
         <h2 className="section-title">Comments</h2>
-        <CommentList key={commentsKey} postId={post.id} />
+        <CommentList
+          key={commentsKey}
+          postId={post.id}
+          postAuthorId={post.author.id}
+          onCountChange={(count) => setPost((p) => ({ ...p, commentCount: count }))}
+        />
         <CommentComposer postId={post.id} onPosted={() => {
           setPost((p) => ({ ...p, commentCount: p.commentCount + 1 }));
           setCommentsKey((k) => k + 1);

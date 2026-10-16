@@ -14,6 +14,8 @@ export default function Explore() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const [followedCreators, setFollowedCreators] = useState({});
+
   // Keep the input in sync when the URL changes (e.g. clicking a #hashtag in a caption).
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
 
@@ -35,6 +37,16 @@ export default function Explore() {
     setParams(value.trim() ? { q: value } : {}, { replace: true });
   };
 
+  const followCreator = async (target) => {
+    try {
+      const willUnfollow = !!followedCreators[target.id];
+      const res = await api(`/users/${target.username}/follow`, { method: willUnfollow ? 'DELETE' : 'POST' });
+      setFollowedCreators((prev) => ({ ...prev, [target.id]: res.followed || res.requested }));
+    } catch {
+      // ignore
+    }
+  };
+
   const searching = q.trim().length > 0;
 
   return (
@@ -51,6 +63,29 @@ export default function Explore() {
             <button key={t.tag} className="chip" onClick={() => onChange(`#${t.tag}`)}>#{t.tag}</button>
           ))}
         </div>
+      )}
+
+      {!searching && data?.suggestedUsers?.length > 0 && (
+        <section aria-label="Discover creators">
+          <h2 className="section-title">Discover creators</h2>
+          <div className="creators-scroll">
+            {data.suggestedUsers.map((u) => (
+              <div key={u.id} className="creator-card">
+                <Link to={`/u/${u.username}`} className="creator-card__link">
+                  <Avatar user={u} size={52} />
+                  <span className="strong small truncate" style={{ maxWidth: 130 }}>{u.displayName}</span>
+                  <span className="muted small truncate" style={{ maxWidth: 130 }}>@{u.username}</span>
+                </Link>
+                <button
+                  className={`btn btn--sm${followedCreators[u.id] ? '' : ' btn--primary'}`}
+                  onClick={() => followCreator(u)}
+                >
+                  {followedCreators[u.id] ? 'Following' : 'Follow'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {error && <ErrorState message={error} />}

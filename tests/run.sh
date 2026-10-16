@@ -60,3 +60,4 @@ node admin.mjs
 node delete_account.mjs
 node security.mjs
 node account_features.mjs
+node social_features.mjs

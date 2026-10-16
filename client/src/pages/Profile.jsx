@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Grid3x3, Clapperboard, Bookmark, Lock, Play, Image as ImageIcon, Settings as SettingsIcon, MessageCircle } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
+import Sheet from '../components/Sheet.jsx';
 import { ErrorState, Spinner, EmptyState } from '../components/Feedback.jsx';
 import { api } from '../lib/api';
 import { useAuth, useToast } from '../lib/context.jsx';
@@ -17,6 +18,9 @@ export default function Profile() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState('posts');
   const [saved, setSaved] = useState(null);
+  const [followModal, setFollowModal] = useState(null);
+  const [followUsers, setFollowUsers] = useState(null);
+  const [followLoading, setFollowLoading] = useState(false);
 
   const load = () => {
     setError('');
@@ -53,6 +57,38 @@ export default function Profile() {
     }
   };
 
+  const openFollowList = async (type) => {
+    if (locked) return;
+    setFollowModal(type);
+    setFollowLoading(true);
+    try {
+      const res = await api(`/users/${username}/${type}`);
+      setFollowUsers(res.users);
+    } catch (err) {
+      toast.show(err.message);
+      setFollowModal(null);
+    } finally {
+      setFollowLoading(false);
+    }
+  };
+
+  const toggleListFollow = async (targetUser) => {
+    try {
+      const willUnfollow = targetUser.followed || targetUser.requested;
+      const res = await api(`/users/${targetUser.username}/follow`, { method: willUnfollow ? 'DELETE' : 'POST' });
+      setFollowUsers((prev) =>
+        (prev || []).map((item) =>
+          item.id === targetUser.id
+            ? { ...item, followed: res.followed, requested: res.requested }
+            : item
+        )
+      );
+      if (isMe) load();
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
+
   const shown = tab === 'saved' ? saved || [] : (data.posts || []).filter((p) => (tab === 'reels' ? p.mediaType === 'video' : true));
 
   return (
@@ -79,8 +115,28 @@ export default function Profile() {
           </div>
           <ul className="profile__stats">
             <li><strong>{formatCount(user.posts)}</strong> posts</li>
-            <li><strong>{formatCount(user.followers)}</strong> followers</li>
-            <li><strong>{formatCount(user.following)}</strong> following</li>
+            <li>
+              <button
+                className="btn-link"
+                disabled={locked}
+                onClick={() => openFollowList('followers')}
+                style={{ cursor: locked ? 'default' : 'pointer' }}
+                aria-label={`${formatCount(user.followers)} followers`}
+              >
+                <strong>{formatCount(user.followers)}</strong> followers
+              </button>
+            </li>
+            <li>
+              <button
+                className="btn-link"
+                disabled={locked}
+                onClick={() => openFollowList('following')}
+                style={{ cursor: locked ? 'default' : 'pointer' }}
+                aria-label={`${formatCount(user.following)} following`}
+              >
+                <strong>{formatCount(user.following)}</strong> following
+              </button>
+            </li>
           </ul>
           <p className="strong">{user.displayName}</p>
           {user.bio && <p className="bio">{user.bio}</p>}
@@ -121,6 +177,45 @@ export default function Profile() {
             </div>
           )}
         </>
+      )}
+      {followModal && (
+        <Sheet
+          open={!!followModal}
+          onClose={() => setFollowModal(null)}
+          title={followModal === 'followers' ? 'Followers' : 'Following'}
+        >
+          {followLoading ? (
+            <div className="center-pad"><Spinner /></div>
+          ) : followUsers && followUsers.length === 0 ? (
+            <p className="muted center-pad">No {followModal} yet.</p>
+          ) : (
+            <div className="stack-sm">
+              {followUsers?.map((u) => (
+                <div key={u.id} className="person-row">
+                  <Link
+                    to={`/u/${u.username}`}
+                    className="person"
+                    onClick={() => setFollowModal(null)}
+                  >
+                    <Avatar user={u} size={40} />
+                    <span className="person__names">
+                      <span className="strong">{u.displayName}</span>
+                      <span className="muted small">@{u.username}</span>
+                    </span>
+                  </Link>
+                  {!u.isMe && (
+                    <button
+                      className={`btn btn--sm${u.followed || u.requested ? '' : ' btn--primary'}`}
+                      onClick={() => toggleListFollow(u)}
+                    >
+                      {u.followed ? 'Following' : u.requested ? 'Requested' : 'Follow'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Sheet>
       )}
     </div>
   );

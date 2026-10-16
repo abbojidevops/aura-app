@@ -62,6 +62,15 @@ export function subscribeRealtime(fn) {
   };
 }
 
+// Send a message over the open WebSocket connection.
+export function sendRealtime(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(typeof data === 'string' ? data : JSON.stringify(data));
+    return true;
+  }
+  return false;
+}
+
 // True while the socket is authenticated and open.
 export function useRealtimeLive() {
   const [value, setValue] = useState(live);
