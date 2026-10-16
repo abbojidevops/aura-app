@@ -11,6 +11,7 @@ import PostPage from './pages/PostPage.jsx';
 import Messages from './pages/Messages.jsx';
 import Notifications from './pages/Notifications.jsx';
 import Settings from './pages/Settings.jsx';
+import Admin from './pages/Admin.jsx';
 import { useAuth } from './lib/context.jsx';
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="messages/:id" element={<Messages />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="admin" element={<Admin />} />
         <Route path="*" element={
           <div className="center-pad fade-up">
             <h1 className="page-title">Page not found</h1>

@@ -1,43 +1,71 @@
 // App chrome. Desktop (≥ 900px): left sidebar. Mobile: top bar + bottom navigation.
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search } from 'lucide-react';
+import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search, Shield } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import { useAuth } from '../lib/context.jsx';
 import { api } from '../lib/api';
-
-const NAV = [
-  { to: '/', label: 'Home', icon: Home, end: true },
-  { to: '/explore', label: 'Explore', icon: Compass },
-  { to: '/reels', label: 'Reels', icon: Clapperboard },
-  { to: '/messages', label: 'Messages', icon: MessageCircle },
-  { to: '/notifications', label: 'Notifications', icon: Bell, badge: true },
-  { to: '/create', label: 'Create', icon: PlusSquare },
-];
+import { subscribeRealtime } from '../lib/realtime';
 
 export default function Shell() {
   const { user } = useAuth();
   const location = useLocation();
-  const [unread, setUnread] = useState(0);
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const immersive = location.pathname === '/reels';
 
-  // Poll the unread-notifications count for the badge. Swap for a WebSocket push later.
+  const loadNotifs = useCallback(() => {
+    api('/notifications')
+      .then((d) => setUnreadNotifs(d.unread || 0))
+      .catch(() => {});
+  }, []);
+
+  const loadMessages = useCallback(() => {
+    api('/messages')
+      .then((d) => {
+        const sum = (d.conversations || []).reduce((acc, c) => acc + (c.unread || 0), 0);
+        setUnreadMessages(sum);
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
-    let alive = true;
-    const load = () => api('/notifications').then((d) => alive && setUnread(d.unread)).catch(() => {});
-    load();
-    const id = setInterval(load, 20000);
-    return () => { alive = false; clearInterval(id); };
-  }, [location.pathname]);
+    loadNotifs();
+    loadMessages();
+    const id = setInterval(() => {
+      loadNotifs();
+      loadMessages();
+    }, 20000);
+    return () => clearInterval(id);
+  }, [location.pathname, loadNotifs, loadMessages]);
+
+  useEffect(() => {
+    return subscribeRealtime((msg) => {
+      if (msg.type === 'message') loadMessages();
+      if (msg.type === 'notification') loadNotifs();
+    });
+  }, [loadMessages, loadNotifs]);
+
+  const navItems = [
+    { to: '/', label: 'Home', icon: Home, end: true },
+    { to: '/explore', label: 'Explore', icon: Compass },
+    { to: '/reels', label: 'Reels', icon: Clapperboard },
+    { to: '/messages', label: 'Messages', icon: MessageCircle, count: unreadMessages },
+    { to: '/notifications', label: 'Notifications', icon: Bell, count: unreadNotifs },
+    { to: '/create', label: 'Create', icon: PlusSquare },
+  ];
 
   return (
     <div className={`shell${immersive ? ' shell--immersive' : ''}`}>
       <aside className="sidebar" aria-label="Main navigation">
         <NavLink to="/" className="brand" aria-label="AURA home">AURA</NavLink>
         <nav className="sidebar__nav">
-          {NAV.map(({ to, label, icon: Icon, end, badge }) => (
+          {navItems.map(({ to, label, icon: Icon, end, count }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}>
-              <span className="nav-link__icon"><Icon size={22} />{badge && unread > 0 && <span className="badge" aria-label={`${unread} unread`}>{unread > 9 ? '9+' : unread}</span>}</span>
+              <span className="nav-link__icon">
+                <Icon size={22} />
+                {count > 0 && <span className="badge" aria-label={`${count} unread`}>{count > 9 ? '9+' : count}</span>}
+              </span>
               <span>{label}</span>
             </NavLink>
           ))}
@@ -49,6 +77,12 @@ export default function Shell() {
             <span className="nav-link__icon"><Settings size={22} /></span>
             <span>Settings</span>
           </NavLink>
+          {user?.isAdmin && (
+            <NavLink to="/admin" className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}>
+              <span className="nav-link__icon"><Shield size={22} /></span>
+              <span>Admin</span>
+            </NavLink>
+          )}
         </nav>
         {user && (
           <NavLink to={`/u/${user.username}`} className="sidebar__me">
@@ -65,11 +99,14 @@ export default function Shell() {
         <NavLink to="/" className="brand brand--sm" aria-label="AURA home">AURA</NavLink>
         <div className="topbar__actions">
           <NavLink to="/explore" className="icon-btn" aria-label="Search"><Search size={22} /></NavLink>
-          <NavLink to="/notifications" className="icon-btn" aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}>
+          <NavLink to="/notifications" className="icon-btn" aria-label={unreadNotifs ? `Notifications, ${unreadNotifs} unread` : 'Notifications'}>
             <Bell size={22} />
-            {unread > 0 && <span className="dot" aria-hidden="true" />}
+            {unreadNotifs > 0 && <span className="dot" aria-hidden="true" />}
           </NavLink>
-          <NavLink to="/messages" className="icon-btn" aria-label="Messages"><MessageCircle size={22} /></NavLink>
+          <NavLink to="/messages" className="icon-btn" aria-label={unreadMessages ? `Messages, ${unreadMessages} unread` : 'Messages'}>
+            <MessageCircle size={22} />
+            {unreadMessages > 0 && <span className="dot" aria-hidden="true" />}
+          </NavLink>
         </div>
       </header>
 
@@ -99,16 +136,25 @@ function BreakReminder() {
   useEffect(() => {
     const minutes = Number(localStorage.getItem('aura-break-minutes') || 0);
     if (!minutes) return;
-    const id = setTimeout(() => setShow(true), minutes * 60_000);
-    return () => clearTimeout(id);
+    const key = `aura-break-shown-${new Date().toISOString().slice(0, 10)}`;
+    if (sessionStorage.getItem(key)) return;
+    const timer = setTimeout(() => {
+      setShow(true);
+      sessionStorage.setItem(key, '1');
+    }, minutes * 60 * 1000);
+    return () => clearTimeout(timer);
   }, []);
+
   if (!show) return null;
   return (
     <div className="break-banner fade-up" role="status">
-      <span>You’ve been here a while. Want a short break?</span>
+      <div>
+        <p className="strong">Time for a breath?</p>
+        <p className="muted small">You’ve been here a while. Step away, stretch, or look at something far away.</p>
+      </div>
       <div className="row">
-        <button className="btn btn--sm" onClick={() => setShow(false)}>Keep going</button>
-        <button className="btn btn--sm btn--primary" onClick={() => { setShow(false); navigate('/settings'); }}>Settings</button>
+        <button className="btn btn--sm" onClick={() => setShow(false)}>Dismiss</button>
+        <button className="btn btn--sm btn--primary" onClick={() => { setShow(false); navigate('/settings'); }}>Adjust timer</button>
       </div>
     </div>
   );

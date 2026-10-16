@@ -29,7 +29,7 @@ const notFound = (res, what = 'Not found') => res.status(404).json({ error: what
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 function userPublic(u) {
-  return { id: u.id, username: u.username, displayName: u.display_name, bio: u.bio, avatarHue: u.avatar_hue, isPrivate: !!u.is_private, createdAt: u.created_at };
+  return { id: u.id, username: u.username, displayName: u.display_name, bio: u.bio, avatarHue: u.avatar_hue, isPrivate: !!u.is_private, isAdmin: !!u.is_admin, createdAt: u.created_at };
 }
 
 async function counts(userId) {
@@ -322,6 +322,51 @@ api.get('/me/export', wrap(async (req, res) => {
   };
   res.setHeader('Content-Disposition', 'attachment; filename="aura-export.json"');
   res.json(data);
+}));
+
+api.post('/me/password', wrap(async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || '');
+  const newPassword = String(req.body?.newPassword || '');
+  if (!currentPassword || !verifyPassword(currentPassword, req.user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+  if (newPassword.length < 8) {
+    return bad(res, 'New password must be at least 8 characters.');
+  }
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hashPassword(newPassword), me(req)]);
+  res.json({ ok: true });
+}));
+
+api.get('/me/sessions', wrap(async (req, res) => {
+  const currentToken = req.token;
+  const rows = await db.all(
+    'SELECT created_at, (token = ?) AS is_current FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
+    [currentToken, me(req)]
+  );
+  res.json({ sessions: rows, count: rows.length });
+}));
+
+api.post('/me/sessions/revoke-others', wrap(async (req, res) => {
+  const currentToken = req.token;
+  const otherSessions = await db.all(
+    'SELECT token FROM sessions WHERE user_id = ? AND token != ?',
+    [me(req), currentToken]
+  );
+  for (const s of otherSessions) {
+    realtime.closeSession(s.token);
+  }
+  await db.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', [me(req), currentToken]);
+  res.json({ ok: true, revoked: otherSessions.length });
+}));
+
+api.get('/me/saved', wrap(async (req, res) => {
+  const viewerId = me(req);
+  const rows = await db.all(`${POST_SELECT}
+    JOIN saves s ON s.post_id = p.id AND s.user_id = @me
+    WHERE p.status = 'published' AND ${VISIBLE}
+    ORDER BY s.created_at DESC LIMIT 60`, { me: viewerId });
+  await attachTags(rows);
+  res.json({ posts: rows.map(serializePost) });
 }));
 
 // ----- Feed settings: mood mode and transparent slider weights -----

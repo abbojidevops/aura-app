@@ -127,15 +127,27 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   );
 }
 
-// Turns #hashtags into links to Explore.
+// Turns #hashtags into Explore links and @mentions into Profile links.
 export function CaptionText({ text }) {
-  return text.split(/(#[\p{L}\p{N}_]+)/u).map((part, i) =>
-    part.startsWith('#') ? (
-      <Link key={i} to={`/explore?q=${encodeURIComponent(part)}`} className="tag">{part}</Link>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
+  if (!text) return null;
+  return text.split(/(#[\p{L}\p{N}_]+|@[a-zA-Z0-9_.]+)/u).map((part, i) => {
+    if (part.startsWith('#')) {
+      return (
+        <Link key={i} to={`/explore?q=${encodeURIComponent(part)}`} className="tag">
+          {part}
+        </Link>
+      );
+    }
+    if (part.startsWith('@')) {
+      const uname = part.slice(1);
+      return (
+        <Link key={i} to={`/u/${uname}`} className="tag" style={{ color: 'var(--accent)' }}>
+          {part}
+        </Link>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 export { REPORT_REASONS, MoreHorizontal };

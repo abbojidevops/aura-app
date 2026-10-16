@@ -1,9 +1,10 @@
-// Settings: appearance, profile, wellbeing, privacy and data export, and sign out.
+// Settings: appearance, profile, wellbeing, security, privacy, data export, and account deletion.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sun, Moon, Monitor, Download, LogOut } from 'lucide-react';
+import { Sun, Moon, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTriangle } from 'lucide-react';
 import { api, getToken } from '../lib/api';
 import { useAuth, useTheme, useToast } from '../lib/context.jsx';
+import Sheet from '../components/Sheet.jsx';
 
 const THEMES = [
   { id: 'light', label: 'Light', icon: Sun },
@@ -16,15 +17,33 @@ export default function Settings() {
   const { theme, setTheme } = useTheme();
   const toast = useToast();
   const navigate = useNavigate();
+
+  // Profile form state
   const [form, setForm] = useState({ displayName: '', bio: '', isPrivate: false });
   const [saving, setSaving] = useState(false);
   const [breakMinutes, setBreakMinutes] = useState(localStorage.getItem('aura-break-minutes') || '0');
 
+  // Password form state
+  const [pwdForm, setPwdForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [savingPwd, setSavingPwd] = useState(false);
+
+  // Sessions state
+  const [sessionCount, setSessionCount] = useState(1);
+  const [revoking, setRevoking] = useState(false);
+
+  // Delete account modal state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     if (user) setForm({ displayName: user.displayName, bio: user.bio || '', isPrivate: user.isPrivate });
+    api('/me/sessions')
+      .then((d) => setSessionCount(d.count || 1))
+      .catch(() => {});
   }, [user]);
 
-  const save = async (e) => {
+  const saveProfile = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
@@ -35,6 +54,42 @@ export default function Settings() {
       toast.show(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const changePassword = async (e) => {
+    e.preventDefault();
+    if (pwdForm.newPassword !== pwdForm.confirmPassword) {
+      return toast.show('New passwords do not match.');
+    }
+    if (pwdForm.newPassword.length < 8) {
+      return toast.show('Password must be at least 8 characters.');
+    }
+    setSavingPwd(true);
+    try {
+      await api('/me/password', {
+        method: 'POST',
+        body: { currentPassword: pwdForm.currentPassword, newPassword: pwdForm.newPassword },
+      });
+      setPwdForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      toast.show('Password updated successfully');
+    } catch (err) {
+      toast.show(err.message);
+    } finally {
+      setSavingPwd(false);
+    }
+  };
+
+  const revokeOtherSessions = async () => {
+    setRevoking(true);
+    try {
+      const res = await api('/me/sessions/revoke-others', { method: 'POST' });
+      setSessionCount(1);
+      toast.show(`Signed out of ${res.revoked || 0} other session(s)`);
+    } catch (err) {
+      toast.show(err.message);
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -56,10 +111,26 @@ export default function Settings() {
     toast.show(Number(value) ? `Break reminder set for ${value} minutes` : 'Break reminders off');
   };
 
+  const handleDeleteAccount = async (e) => {
+    e.preventDefault();
+    if (!deletePassword) return toast.show('Enter your password to confirm.');
+    setDeleting(true);
+    try {
+      await api('/me', { method: 'DELETE', body: { password: deletePassword } });
+      toast.show('Your account has been deleted.');
+      await signOut();
+      navigate('/login', { replace: true });
+    } catch (err) {
+      toast.show(err.message);
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="settings fade-up">
       <h1 className="page-title">Settings</h1>
 
+      {/* Appearance */}
       <section className="card settings__section" aria-labelledby="s-appearance">
         <h2 id="s-appearance" className="section-title">Appearance</h2>
         <div className="segmented segmented--wide" role="radiogroup" aria-label="Theme">
@@ -71,9 +142,10 @@ export default function Settings() {
         </div>
       </section>
 
+      {/* Profile */}
       <section className="card settings__section" aria-labelledby="s-profile">
         <h2 id="s-profile" className="section-title">Edit profile</h2>
-        <form className="stack" onSubmit={save}>
+        <form className="stack" onSubmit={saveProfile}>
           <label className="field">
             <span>Display name</span>
             <input className="input" value={form.displayName} maxLength={40} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
@@ -94,6 +166,66 @@ export default function Settings() {
         </form>
       </section>
 
+      {/* Security & Password */}
+      <section className="card settings__section" aria-labelledby="s-security">
+        <h2 id="s-security" className="section-title">Password & Security</h2>
+        <form className="stack" onSubmit={changePassword}>
+          <label className="field">
+            <span>Current password</span>
+            <input
+              type="password"
+              className="input"
+              value={pwdForm.currentPassword}
+              required
+              onChange={(e) => setPwdForm({ ...pwdForm, currentPassword: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>New password</span>
+            <input
+              type="password"
+              className="input"
+              value={pwdForm.newPassword}
+              required
+              minLength={8}
+              onChange={(e) => setPwdForm({ ...pwdForm, newPassword: e.target.value })}
+            />
+            <small className="muted small">At least 8 characters</small>
+          </label>
+          <label className="field">
+            <span>Confirm new password</span>
+            <input
+              type="password"
+              className="input"
+              value={pwdForm.confirmPassword}
+              required
+              minLength={8}
+              onChange={(e) => setPwdForm({ ...pwdForm, confirmPassword: e.target.value })}
+            />
+          </label>
+          <div>
+            <button className="btn" disabled={savingPwd}>
+              <KeyRound size={16} /> {savingPwd ? 'Updating…' : 'Change password'}
+            </button>
+          </div>
+        </form>
+
+        <div className="divider" />
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <span className="strong block">Active sessions</span>
+            <span className="muted small">You are logged into {sessionCount} device{sessionCount === 1 ? '' : 's'}.</span>
+          </div>
+          {sessionCount > 1 && (
+            <button className="btn btn--sm" disabled={revoking} onClick={revokeOtherSessions}>
+              <Shield size={14} /> {revoking ? 'Signing out…' : 'Sign out other devices'}
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* Wellbeing */}
       <section className="card settings__section" aria-labelledby="s-wellbeing">
         <h2 id="s-wellbeing" className="section-title">Wellbeing</h2>
         <label className="field">
@@ -108,18 +240,64 @@ export default function Settings() {
         <p className="muted small">The reminder appears once per visit. It’s a gentle nudge, not a lock.</p>
       </section>
 
+      {/* Your Data */}
       <section className="card settings__section" aria-labelledby="s-data">
         <h2 id="s-data" className="section-title">Your data</h2>
         <p className="muted">Download everything AURA holds about you: profile, posts, comments, likes, follows, and messages you sent.</p>
         <button className="btn" onClick={exportData}><Download size={16} /> Export my data</button>
       </section>
 
+      {/* Account & Danger Zone */}
       <section className="card settings__section" aria-labelledby="s-account">
         <h2 id="s-account" className="section-title">Account</h2>
-        <button className="btn btn--danger" onClick={async () => { await signOut(); navigate('/login', { replace: true }); }}>
-          <LogOut size={16} /> Sign out
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <button className="btn" onClick={async () => { await signOut(); navigate('/login', { replace: true }); }}>
+              <LogOut size={16} /> Sign out
+            </button>
+          </div>
+          <div className="divider" />
+          <div>
+            <h3 className="strong text-danger" style={{ color: 'var(--danger)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AlertTriangle size={16} /> Danger zone
+            </h3>
+            <p className="muted small" style={{ marginBottom: 12 }}>
+              Permanently delete your account and all associated posts, media, likes, comments, and messages.
+            </p>
+            <button className="btn btn--danger" onClick={() => setDeleteModalOpen(true)}>
+              <Trash2 size={16} /> Delete my account
+            </button>
+          </div>
+        </div>
       </section>
+
+      {/* Delete Account Confirmation Sheet */}
+      <Sheet open={deleteModalOpen} onClose={() => setDeleteModalOpen(false)} title="Delete Account">
+        <form onSubmit={handleDeleteAccount} className="stack" style={{ gap: 14 }}>
+          <p className="muted">
+            This action cannot be undone. All of your photos, videos, posts, comments, likes, saves, and messages will be permanently deleted.
+          </p>
+          <label className="field">
+            <span>Enter your password to confirm</span>
+            <input
+              type="password"
+              className="input"
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+              placeholder="Your current password"
+              required
+            />
+          </label>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" className="btn" onClick={() => setDeleteModalOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn--danger btn--primary" style={{ background: 'var(--danger)' }} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Permanently Delete'}
+            </button>
+          </div>
+        </form>
+      </Sheet>
     </div>
   );
 }

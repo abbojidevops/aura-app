@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Avatar from './Avatar.jsx';
+import { CaptionText } from './PostCard.jsx';
 import { Spinner, ErrorState } from './Feedback.jsx';
 import { api } from '../lib/api';
 import { timeAgo } from '../lib/format';
@@ -27,7 +28,7 @@ export function CommentList({ postId, onCountChange }) {
         <li key={c.id} className="comment fade-up">
           <Link to={`/u/${c.author.username}`} aria-label={`@${c.author.username}`}><Avatar user={c.author} size={32} /></Link>
           <div>
-            <p><Link to={`/u/${c.author.username}`} className="strong">@{c.author.username}</Link> {c.body}</p>
+            <p><Link to={`/u/${c.author.username}`} className="strong">@{c.author.username}</Link> <CaptionText text={c.body} /></p>
             <span className="muted small">{timeAgo(c.createdAt)}</span>
           </div>
         </li>
