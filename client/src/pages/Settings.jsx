@@ -5,6 +5,7 @@ import { Sun, Moon, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTr
 import { api, getToken } from '../lib/api';
 import { useAuth, useTheme, useToast } from '../lib/context.jsx';
 import Sheet from '../components/Sheet.jsx';
+import Avatar from '../components/Avatar.jsx';
 
 const THEMES = [
   { id: 'light', label: 'Light', icon: Sun },
@@ -19,7 +20,7 @@ export default function Settings() {
   const navigate = useNavigate();
 
   // Profile form state
-  const [form, setForm] = useState({ displayName: '', bio: '', isPrivate: false });
+  const [form, setForm] = useState({ displayName: '', bio: '', isPrivate: false, avatarHue: 260 });
   const [saving, setSaving] = useState(false);
   const [breakMinutes, setBreakMinutes] = useState(localStorage.getItem('aura-break-minutes') || '0');
 
@@ -37,7 +38,14 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    if (user) setForm({ displayName: user.displayName, bio: user.bio || '', isPrivate: user.isPrivate });
+    if (user) {
+      setForm({
+        displayName: user.displayName,
+        bio: user.bio || '',
+        isPrivate: user.isPrivate,
+        avatarHue: user.avatarHue ?? 260,
+      });
+    }
     api('/me/sessions')
       .then((d) => setSessionCount(d.count || 1))
       .catch(() => {});
@@ -162,6 +170,32 @@ export default function Settings() {
               <span className="muted small block">Only people who follow you can see your posts.</span>
             </span>
           </label>
+
+          <div className="field">
+            <span>Avatar gradient</span>
+            <div className="row" style={{ alignItems: 'center', gap: 16, marginTop: 4 }}>
+              <Avatar user={{ displayName: form.displayName || 'You', avatarHue: form.avatarHue }} size={56} />
+              <div style={{ flex: 1 }}>
+                <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span className="small muted">Color tone</span>
+                  <span className="small strong">{form.avatarHue}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="360"
+                  value={form.avatarHue}
+                  onChange={(e) => setForm({ ...form, avatarHue: Number(e.target.value) })}
+                  style={{
+                    width: '100%',
+                    accentColor: `hsl(${form.avatarHue} 85% 55%)`,
+                    cursor: 'pointer',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
           <div><button className="btn btn--primary" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></div>
         </form>
       </section>

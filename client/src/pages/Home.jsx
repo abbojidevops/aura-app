@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { Sparkles, BookOpen, Smile, Leaf, TrendingUp, Target, Dices, SlidersHorizontal, UserPlus, Pause } from 'lucide-react';
 import PostCard from '../components/PostCard.jsx';
 import TuneFeed from '../components/TuneFeed.jsx';
+import StoryTray from '../components/StoryTray.jsx';
 import { PostSkeleton, EmptyState, ErrorState, Spinner } from '../components/Feedback.jsx';
 import { useFeed } from '../lib/useFeed';
 import { api } from '../lib/api';
@@ -77,6 +78,8 @@ export default function Home() {
           <SlidersHorizontal size={16} /> Tune
         </button>
       </div>
+
+      <StoryTray />
 
       {prefs && tab === 'home' && (
         <div className="moods" role="radiogroup" aria-label="Mood mode">

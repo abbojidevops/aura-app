@@ -166,10 +166,14 @@ api.patch('/me', wrap(async (req, res) => {
   const displayName = req.body?.displayName !== undefined ? String(req.body.displayName).trim().slice(0, 40) : current.display_name;
   const bio = req.body?.bio !== undefined ? String(req.body.bio).slice(0, 160) : current.bio;
   const isPrivate = req.body?.isPrivate !== undefined ? (req.body.isPrivate ? 1 : 0) : current.is_private;
+  let avatarHue = current.avatar_hue;
+  if (req.body?.avatarHue !== undefined && !isNaN(Number(req.body.avatarHue))) {
+    avatarHue = Math.max(0, Math.min(360, Math.round(Number(req.body.avatarHue))));
+  }
   if (!displayName) return bad(res, 'Display name cannot be empty.');
   const updated = await db.get(
-    'UPDATE users SET display_name = ?, bio = ?, is_private = ? WHERE id = ? RETURNING *',
-    [displayName, bio, isPrivate, current.id]
+    'UPDATE users SET display_name = ?, bio = ?, is_private = ?, avatar_hue = ? WHERE id = ? RETURNING *',
+    [displayName, bio, isPrivate, avatarHue, current.id]
   );
   res.json({ user: userPublic(updated) });
 }));
@@ -435,6 +439,142 @@ api.get('/explore', wrap(async (req, res) => {
     ORDER BY p.like_count DESC, p.created_at DESC LIMIT 60`, { me: me(req), like, tag });
   await attachTags(rows);
   res.json({ users, posts: rows.map(serializePost), tags: [] });
+}));
+
+// ----- Stories -----
+api.post('/stories', upload.single('media'), wrap(async (req, res) => {
+  const file = req.file;
+  const cleanup = () => file && fs.rm(file.path, { force: true }, () => {});
+  if (!file) return bad(res, 'Choose a photo or video for your story.');
+  const isImage = IMAGE_TYPES.includes(file.mimetype);
+  const isVideo = VIDEO_TYPES.includes(file.mimetype);
+  if (!isImage && !isVideo) { cleanup(); return bad(res, 'Unsupported file. Use JPG, PNG, WebP, GIF, MP4, MOV or WebM.'); }
+  if (isImage && file.size > 20 * 1024 * 1024) { cleanup(); return bad(res, 'Photos must be 20 MB or smaller.'); }
+  const caption = String(req.body?.caption || '').slice(0, 500);
+  const mediaType = isVideo ? 'video' : 'image';
+
+  try {
+    const row = await db.get(
+      'INSERT INTO stories (user_id, media_type, media_url, thumb_url, caption) VALUES (?, ?, ?, ?, ?) RETURNING id, created_at, expires_at',
+      [me(req), mediaType, '', '', caption]
+    );
+    const processed = await media.processStoryMedia(row.id, file.path, mediaType);
+    await db.run(
+      'UPDATE stories SET media_url = ?, thumb_url = ? WHERE id = ?',
+      [processed.mediaUrl, processed.thumbUrl, row.id]
+    );
+    res.status(201).json({
+      story: {
+        id: row.id,
+        mediaType,
+        mediaUrl: mediaUrl(processed.mediaUrl),
+        thumbUrl: mediaUrl(processed.thumbUrl),
+        caption,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        viewed: true,
+      },
+    });
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}));
+
+api.get('/stories/feed', wrap(async (req, res) => {
+  const viewerId = me(req);
+  const rows = await db.all(`
+    SELECT s.id, s.user_id, s.media_type, s.media_url, s.thumb_url, s.caption, s.created_at, s.expires_at,
+      u.username, u.display_name, u.avatar_hue,
+      EXISTS (SELECT 1 FROM story_views sv WHERE sv.story_id = s.id AND sv.viewer_id = @me) AS viewed
+    FROM stories s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.expires_at > now()
+      AND (s.user_id = @me OR s.user_id IN (SELECT following_id FROM follows WHERE follower_id = @me))
+      AND u.suspended_at IS NULL
+    ORDER BY (s.user_id = @me) DESC, s.created_at ASC`, { me: viewerId });
+
+  const byUser = new Map();
+  for (const r of rows) {
+    if (!byUser.has(r.user_id)) {
+      byUser.set(r.user_id, {
+        author: {
+          id: r.user_id,
+          username: r.username,
+          displayName: r.display_name,
+          avatarHue: r.avatar_hue,
+          isMe: r.user_id === viewerId,
+        },
+        stories: [],
+        hasUnseen: false,
+      });
+    }
+    const group = byUser.get(r.user_id);
+    const isViewed = !!r.viewed;
+    if (!isViewed && r.user_id !== viewerId) {
+      group.hasUnseen = true;
+    }
+    group.stories.push({
+      id: r.id,
+      mediaType: r.media_type,
+      mediaUrl: mediaUrl(r.media_url),
+      thumbUrl: mediaUrl(r.thumb_url),
+      caption: r.caption,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+      viewed: isViewed,
+    });
+  }
+
+  const list = [...byUser.values()].sort((a, b) => {
+    if (a.author.isMe) return -1;
+    if (b.author.isMe) return 1;
+    if (a.hasUnseen && !b.hasUnseen) return -1;
+    if (!a.hasUnseen && b.hasUnseen) return 1;
+    return 0;
+  });
+
+  res.json({ groups: list });
+}));
+
+api.post('/stories/:id/view', wrap(async (req, res) => {
+  const storyId = Number(req.params.id);
+  const story = await db.get('SELECT id FROM stories WHERE id = ? AND expires_at > now()', [storyId]);
+  if (!story) return notFound(res, 'Story not found or expired.');
+  await db.run('INSERT INTO story_views (story_id, viewer_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [storyId, me(req)]);
+  res.json({ ok: true });
+}));
+
+api.get('/stories/:id/views', wrap(async (req, res) => {
+  const storyId = Number(req.params.id);
+  const story = await db.get('SELECT user_id FROM stories WHERE id = ?', [storyId]);
+  if (!story) return notFound(res, 'Story not found.');
+  if (story.user_id !== me(req)) return res.status(403).json({ error: 'Only the story author can see views.' });
+  const views = await db.all(`
+    SELECT u.id, u.username, u.display_name, u.avatar_hue, sv.created_at AS viewed_at
+    FROM story_views sv
+    JOIN users u ON u.id = sv.viewer_id
+    WHERE sv.story_id = ?
+    ORDER BY sv.created_at DESC LIMIT 100`, [storyId]);
+  res.json({
+    viewers: views.map((v) => ({
+      id: v.id,
+      username: v.username,
+      displayName: v.display_name,
+      avatarHue: v.avatar_hue,
+      viewedAt: v.viewed_at,
+    })),
+  });
+}));
+
+api.delete('/stories/:id', wrap(async (req, res) => {
+  const storyId = Number(req.params.id);
+  const story = await db.get('SELECT user_id FROM stories WHERE id = ?', [storyId]);
+  if (!story) return notFound(res, 'Story not found.');
+  if (story.user_id !== me(req)) return res.status(403).json({ error: 'You can only delete your own stories.' });
+  await db.run('DELETE FROM stories WHERE id = ?', [storyId]);
+  media.deleteStoryMedia(storyId);
+  res.json({ ok: true });
 }));
 
 // ----- Posts -----

@@ -132,4 +132,40 @@ async function recoverStale() {
   await db.run("UPDATE posts SET status = 'failed' WHERE status = 'processing'");
 }
 
-module.exports = { enqueueProcessing, recoverStale, idle, hasFfmpeg, FFMPEG, UPLOADS };
+async function processStoryMedia(storyId, src, mediaType) {
+  const dir = path.join(UPLOADS, 'stories', String(storyId));
+  fs.mkdirSync(dir, { recursive: true });
+  if (mediaType === 'video') {
+    const out = path.join(dir, 'video.mp4');
+    const poster = path.join(dir, 'poster.jpg');
+    if (!hasFfmpeg) {
+      fs.copyFileSync(src, out);
+      return { mediaUrl: `/uploads/stories/${storyId}/video.mp4`, thumbUrl: null };
+    }
+    await ffmpeg([
+      '-y', '-hide_banner', '-i', src,
+      '-vf', "scale='min(720,iw)':-2",
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '128k', out,
+    ]);
+    await ffmpeg(['-y', '-hide_banner', '-ss', '0.1', '-i', src, '-frames:v', '1', '-vf', 'scale=480:-2', poster]);
+    return {
+      mediaUrl: `/uploads/stories/${storyId}/video.mp4`,
+      thumbUrl: fs.existsSync(poster) ? `/uploads/stories/${storyId}/poster.jpg` : null,
+    };
+  } else {
+    const outPath = path.join(dir, 'story.webp');
+    await sharp(src).rotate().resize({ width: 1080, height: 1920, fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(outPath);
+    return {
+      mediaUrl: `/uploads/stories/${storyId}/story.webp`,
+      thumbUrl: `/uploads/stories/${storyId}/story.webp`,
+    };
+  }
+}
+
+function deleteStoryMedia(storyId) {
+  const dir = path.join(UPLOADS, 'stories', String(storyId));
+  fs.rm(dir, { recursive: true, force: true }, () => {});
+}
+
+module.exports = { enqueueProcessing, processStoryMedia, deleteStoryMedia, recoverStale, idle, hasFfmpeg, FFMPEG, UPLOADS };
