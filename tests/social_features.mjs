@@ -180,6 +180,42 @@ const openWs = (token) => new Promise((resolve) => {
   const gotNotif = demoWs.events.slice(eventsBefore).find((e) => e.type === 'notification');
   check('demo receives realtime notification event on like', !!gotNotif);
 
+  // 7. Test GET /api/posts/:id/likes (Likers list)
+  const likersAsDemo = await j(`/api/posts/${demoPost.id}/likes`, { token: demoToken });
+  check('GET /posts/:id/likes returns 200', likersAsDemo.status === 200);
+  const u2InLikers = likersAsDemo.data.users?.find((u) => u.id === u2User.id);
+  check('u2 found in likers list', !!u2InLikers && u2InLikers.username === u2Name);
+  check('isMe false for other user in likers list', u2InLikers?.isMe === false);
+
+  const likersAsU2 = await j(`/api/posts/${demoPost.id}/likes`, { token: u2Token });
+  const u2Self = likersAsU2.data.users?.find((u) => u.id === u2User.id);
+  check('isMe true for self in likers list', u2Self?.isMe === true);
+
+  // 8. Test Comment Likes (POST/DELETE /api/comments/:id/like)
+  const cRes = await j(`/api/posts/${demoPost.id}/comments`, {
+    token: demoToken,
+    method: 'POST',
+    body: { body: 'A comment to test liking' },
+  });
+  check('create comment for like test', cRes.status === 201);
+  const postComments = await j(`/api/posts/${demoPost.id}/comments`, { token: u2Token });
+  const targetComment = postComments.data.comments?.find((c) => c.body === 'A comment to test liking');
+  check('target comment found in list', !!targetComment);
+
+  const likeCRes = await j(`/api/comments/${targetComment.id}/like`, { token: u2Token, method: 'POST' });
+  check('like comment returns 200 and liked=true', likeCRes.status === 200 && likeCRes.data.liked === true && likeCRes.data.likeCount === 1);
+
+  const checkAfterLike = await j(`/api/posts/${demoPost.id}/comments`, { token: u2Token });
+  const cAfterLike = checkAfterLike.data.comments?.find((c) => c.id === targetComment.id);
+  check('comment reflects liked=true for liker', cAfterLike?.liked === true && cAfterLike?.likeCount === 1);
+
+  const checkAsOther = await j(`/api/posts/${demoPost.id}/comments`, { token: u3Token });
+  const cAsOther = checkAsOther.data.comments?.find((c) => c.id === targetComment.id);
+  check('comment reflects liked=false for non-liker with count=1', cAsOther?.liked === false && cAsOther?.likeCount === 1);
+
+  const unlikeCRes = await j(`/api/comments/${targetComment.id}/like`, { token: u2Token, method: 'DELETE' });
+  check('unlike comment returns 200 and liked=false', unlikeCRes.status === 200 && unlikeCRes.data.liked === false && unlikeCRes.data.likeCount === 0);
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

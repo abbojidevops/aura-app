@@ -186,9 +186,11 @@ api.delete('/me', wrap(async (req, res) => {
 
   const userId = me(req);
 
-  // Collect the user's post IDs first (media files deleted only AFTER db.tx commit)
+  // Collect the user's post IDs and story IDs first (media files deleted only AFTER db.tx commit)
   const userPosts = await db.all('SELECT id FROM posts WHERE user_id = ?', [userId]);
   const postIds = userPosts.map((p) => p.id);
+  const userStories = await db.all('SELECT id FROM stories WHERE user_id = ?', [userId]);
+  const storyIds = userStories.map((s) => s.id);
 
   // Collect active sessions to close after commit
   const sessions = await db.all('SELECT token FROM sessions WHERE user_id = ?', [userId]);
@@ -260,6 +262,11 @@ api.delete('/me', wrap(async (req, res) => {
         console.error(`[storage] record cleanup failure for post ${postId}:`, insertErr.message);
       }
     }
+  }
+
+  // Clean up media files for all user's stories after commit
+  for (const storyId of storyIds) {
+    media.deleteStoryMedia(storyId);
   }
 
   res.json({ ok: true });
@@ -668,6 +675,35 @@ api.delete('/posts/:id/like', wrap(async (req, res) => {
   res.json({ liked: false, likeCount: row?.like_count ?? 0 });
 }));
 
+api.get('/posts/:id/likes', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const myId = me(req);
+  const post = await getVisiblePost(myId, id);
+  if (!post) return notFound(res, 'This post is unavailable.');
+
+  const rows = await db.all(`
+    SELECT u.id, u.username, u.display_name, u.avatar_hue,
+      EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = @me AND f.following_id = u.id) AS followed,
+      EXISTS (SELECT 1 FROM follow_requests fr WHERE fr.requester_id = @me AND fr.target_id = u.id) AS requested
+    FROM likes l
+    JOIN users u ON u.id = l.user_id
+    WHERE l.post_id = @postId AND u.suspended_at IS NULL
+    ORDER BY l.created_at DESC
+    LIMIT 200`, { postId: id, me: myId });
+
+  res.json({
+    users: rows.map((u) => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      avatarHue: u.avatar_hue,
+      followed: !!u.followed,
+      requested: !!u.requested,
+      isMe: u.id === myId,
+    })),
+  });
+}));
+
 api.post('/posts/:id/save', wrap(async (req, res) => {
   const id = Number(req.params.id);
   if (!(await getVisiblePost(me(req), id))) return notFound(res, 'This post is unavailable.');
@@ -682,13 +718,25 @@ api.delete('/posts/:id/save', wrap(async (req, res) => {
 
 api.get('/posts/:id/comments', wrap(async (req, res) => {
   const id = Number(req.params.id);
-  if (!(await getVisiblePost(me(req), id))) return notFound(res, 'This post is unavailable.');
-  const rows = await db.all(`SELECT c.id, c.body, c.created_at, u.id AS uid, u.username, u.display_name, u.avatar_hue
-    FROM comments c JOIN users u ON u.id = c.user_id WHERE c.post_id = ? ORDER BY c.id ASC LIMIT 200`, [id]);
-  res.json({ comments: rows.map((c) => ({
-    id: c.id, body: c.body, createdAt: c.created_at,
-    author: { id: c.uid, username: c.username, displayName: c.display_name, avatarHue: c.avatar_hue },
-  })) });
+  const myId = me(req);
+  if (!(await getVisiblePost(myId, id))) return notFound(res, 'This post is unavailable.');
+  const rows = await db.all(`
+    SELECT c.id, c.body, c.like_count, c.created_at, u.id AS uid, u.username, u.display_name, u.avatar_hue,
+      EXISTS (SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = @me) AS liked
+    FROM comments c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.post_id = @id
+    ORDER BY c.id ASC LIMIT 200`, { id, me: myId });
+  res.json({
+    comments: rows.map((c) => ({
+      id: c.id,
+      body: c.body,
+      likeCount: c.like_count || 0,
+      liked: !!c.liked,
+      createdAt: c.created_at,
+      author: { id: c.uid, username: c.username, displayName: c.display_name, avatarHue: c.avatar_hue },
+    })),
+  });
 }));
 
 api.post('/posts/:id/comments', wrap(async (req, res) => {
@@ -724,6 +772,40 @@ api.delete('/posts/:id/comments/:commentId', wrap(async (req, res) => {
   });
 
   res.json({ ok: true });
+}));
+
+api.post('/comments/:id/like', wrap(async (req, res) => {
+  const commentId = Number(req.params.id);
+  const myId = me(req);
+  const comment = await db.get('SELECT c.id, c.post_id, c.user_id FROM comments c WHERE c.id = ?', [commentId]);
+  if (!comment) return notFound(res, 'Comment not found.');
+  const post = await getVisiblePost(myId, comment.post_id);
+  if (!post) return notFound(res, 'This post is unavailable.');
+
+  await db.tx(async (t) => {
+    const r = await t.run('INSERT INTO comment_likes (comment_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [commentId, myId]);
+    if (r.changes) {
+      await t.run('UPDATE comments SET like_count = like_count + 1 WHERE id = ?', [commentId]);
+    }
+  });
+  const row = await db.get('SELECT like_count FROM comments WHERE id = ?', [commentId]);
+  res.json({ liked: true, likeCount: row?.like_count || 0 });
+}));
+
+api.delete('/comments/:id/like', wrap(async (req, res) => {
+  const commentId = Number(req.params.id);
+  const myId = me(req);
+  const comment = await db.get('SELECT c.id, c.post_id FROM comments c WHERE c.id = ?', [commentId]);
+  if (!comment) return notFound(res, 'Comment not found.');
+
+  await db.tx(async (t) => {
+    const r = await t.run('DELETE FROM comment_likes WHERE comment_id = ? AND user_id = ?', [commentId, myId]);
+    if (r.changes) {
+      await t.run('UPDATE comments SET like_count = GREATEST(like_count - 1, 0) WHERE id = ?', [commentId]);
+    }
+  });
+  const row = await db.get('SELECT like_count FROM comments WHERE id = ?', [commentId]);
+  res.json({ liked: false, likeCount: row?.like_count || 0 });
 }));
 
 // Reports: three distinct reports automatically hide a post pending human review.
@@ -1060,6 +1142,7 @@ const PORT = Number(process.env.PORT) || 3000;
   await db.init();
   await media.recoverStale();
   await storage.retryCleanup();
+  await media.cleanupExpiredStories();
   const server = http.createServer(app);
   realtime.attach(server);
   server.listen(PORT, '0.0.0.0', () => {

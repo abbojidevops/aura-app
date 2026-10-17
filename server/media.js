@@ -168,4 +168,29 @@ function deleteStoryMedia(storyId) {
   fs.rm(dir, { recursive: true, force: true }, () => {});
 }
 
-module.exports = { enqueueProcessing, processStoryMedia, deleteStoryMedia, recoverStale, idle, hasFfmpeg, FFMPEG, UPLOADS };
+async function cleanupExpiredStories() {
+  try {
+    const expired = await db.all('SELECT id FROM stories WHERE expires_at <= now()');
+    if (!expired || !expired.length) return;
+    for (const s of expired) {
+      deleteStoryMedia(s.id);
+    }
+    const ids = expired.map((s) => s.id);
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`DELETE FROM stories WHERE id IN (${placeholders})`, ids);
+  } catch (err) {
+    console.error('[stories-cleanup] error:', err.message);
+  }
+}
+
+module.exports = {
+  enqueueProcessing,
+  processStoryMedia,
+  deleteStoryMedia,
+  cleanupExpiredStories,
+  recoverStale,
+  idle,
+  hasFfmpeg,
+  FFMPEG,
+  UPLOADS,
+};

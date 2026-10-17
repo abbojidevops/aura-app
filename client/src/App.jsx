@@ -12,6 +12,7 @@ import Messages from './pages/Messages.jsx';
 import Notifications from './pages/Notifications.jsx';
 import Settings from './pages/Settings.jsx';
 import Admin from './pages/Admin.jsx';
+import Saved from './pages/Saved.jsx';
 import { useAuth } from './lib/context.jsx';
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="messages" element={<Messages />} />
         <Route path="messages/:id" element={<Messages />} />
         <Route path="notifications" element={<Notifications />} />
+        <Route path="saved" element={<Saved />} />
         <Route path="settings" element={<Settings />} />
         <Route path="admin" element={<Admin />} />
         <Route path="*" element={

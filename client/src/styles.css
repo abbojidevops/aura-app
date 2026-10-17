@@ -424,10 +424,26 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 
 /* ---------- Comments ---------- */
 .comment-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 14px; }
-.comment { display: flex; gap: 12px; align-items: flex-start; }
+.comment { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.comment__body { flex: 1; min-width: 0; }
 .comment p { font-size: 14px; word-break: break-word; }
+.comment__meta { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.comment__like-btn {
+  background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+  color: var(--muted); padding: 4px; border-radius: 6px; font-size: 12px; transition: color 0.15s;
+}
+.comment__like-btn:hover { color: var(--danger); }
+.comment__like-btn.is-liked { color: var(--danger); }
+.comment__delete { background: none; border: none; cursor: pointer; color: var(--muted); padding: 4px; border-radius: 6px; display: inline-flex; align-items: center; }
+.comment__delete:hover { color: var(--danger); }
 .composer { display: flex; gap: 8px; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border); }
 .comments-card { margin-top: 16px; padding: 16px; }
+
+/* ---------- Likers Modal ---------- */
+.likers-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.likers-list__item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.likers-list__link { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; min-width: 0; flex: 1; }
+
 
 /* ---------- Explore ---------- */
 .explore { max-width: 640px; margin: 0 auto; }

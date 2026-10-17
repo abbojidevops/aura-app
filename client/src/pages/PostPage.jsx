@@ -12,6 +12,7 @@ export default function PostPage() {
   const [post, setPost] = useState(null);
   const [error, setError] = useState('');
   const [commentsKey, setCommentsKey] = useState(0);
+  const [replyUser, setReplyUser] = useState(null);
 
   const load = () => {
     setError('');
@@ -43,11 +44,17 @@ export default function PostPage() {
           postId={post.id}
           postAuthorId={post.author.id}
           onCountChange={(count) => setPost((p) => ({ ...p, commentCount: count }))}
+          onReply={(uname) => setReplyUser(uname)}
         />
-        <CommentComposer postId={post.id} onPosted={() => {
-          setPost((p) => ({ ...p, commentCount: p.commentCount + 1 }));
-          setCommentsKey((k) => k + 1);
-        }} />
+        <CommentComposer
+          postId={post.id}
+          replyUser={replyUser}
+          onReplyHandled={() => setReplyUser(null)}
+          onPosted={() => {
+            setPost((p) => ({ ...p, commentCount: p.commentCount + 1 }));
+            setCommentsKey((k) => k + 1);
+          }}
+        />
       </section>
     </div>
   );

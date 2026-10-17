@@ -1,7 +1,7 @@
 // App chrome. Desktop (≥ 900px): left sidebar. Mobile: top bar + bottom navigation.
 import { useEffect, useState, useCallback } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search, Shield } from 'lucide-react';
+import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search, Shield, Bookmark } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import { useAuth } from '../lib/context.jsx';
 import { api } from '../lib/api';
@@ -72,6 +72,10 @@ export default function Shell() {
           <NavLink to={user ? `/u/${user.username}` : '/'} className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}>
             <span className="nav-link__icon"><User size={22} /></span>
             <span>Profile</span>
+          </NavLink>
+          <NavLink to="/saved" className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}>
+            <span className="nav-link__icon"><Bookmark size={22} /></span>
+            <span>Saved</span>
           </NavLink>
           <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}>
             <span className="nav-link__icon"><Settings size={22} /></span>

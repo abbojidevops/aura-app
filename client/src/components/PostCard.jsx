@@ -4,6 +4,7 @@ import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edi
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
+import { Spinner } from './Feedback.jsx';
 import { useAuth, useToast } from '../lib/context.jsx';
 import { api } from '../lib/api';
 import { toggleLike, toggleSave, sharePost } from '../lib/actions';
@@ -21,8 +22,41 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   const [editCaption, setEditCaption] = useState(post.caption || '');
   const [busyEdit, setBusyEdit] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
-  const [liking, setLiking] = useState(false);
+  const [likersOpen, setLikersOpen] = useState(false);
+  const [likers, setLikers] = useState(null);
+  const [likersLoading, setLikersLoading] = useState(false);
   const isMine = user && post.author.id === user.id;
+
+  const openLikers = async () => {
+    if (post.likeCount <= 0) return;
+    setLikersOpen(true);
+    setLikersLoading(true);
+    try {
+      const res = await api(`/posts/${post.id}/likes`);
+      setLikers(res.users || []);
+    } catch (err) {
+      toast.show(err.message);
+      setLikersOpen(false);
+    } finally {
+      setLikersLoading(false);
+    }
+  };
+
+  const toggleLikerFollow = async (targetUser) => {
+    try {
+      const willUnfollow = targetUser.followed || targetUser.requested;
+      const res = await api(`/users/${targetUser.username}/follow`, { method: willUnfollow ? 'DELETE' : 'POST' });
+      setLikers((prev) =>
+        (prev || []).map((u) =>
+          u.id === targetUser.id
+            ? { ...u, followed: res.followed, requested: res.requested }
+            : u
+        )
+      );
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
 
   const like = () => {
     setLiking(true);
@@ -109,7 +143,21 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
       </div>
 
       <div className="post__body">
-        <p className="strong">{plural(post.likeCount, 'like')}</p>
+        <div style={{ marginBottom: 4 }}>
+          {post.likeCount > 0 ? (
+            <button
+              type="button"
+              className="btn-link strong"
+              onClick={openLikers}
+              style={{ padding: 0, color: 'inherit', font: 'inherit', cursor: 'pointer' }}
+              aria-label="View who liked this post"
+            >
+              {plural(post.likeCount, 'like')}
+            </button>
+          ) : (
+            <span className="strong">0 likes</span>
+          )}
+        </div>
         {post.caption && (
           <p className="caption">
             <Link to={`/u/${post.author.username}`} className="strong">@{post.author.username}</Link>{' '}
@@ -162,6 +210,39 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
           {REPORT_REASONS.map((r) => <button key={r} className="menu__item" onClick={() => report(r)}>{r}</button>)}
         </div>
         <p className="muted small">Posts with three reports are hidden while our team reviews them.</p>
+      </Sheet>
+
+      <Sheet open={likersOpen} onClose={() => setLikersOpen(false)} title="Likes">
+        {likersLoading && <div className="center-pad"><Spinner /></div>}
+        {!likersLoading && likers?.length === 0 && <p className="muted center-pad">No likes yet.</p>}
+        {!likersLoading && likers?.length > 0 && (
+          <ul className="likers-list">
+            {likers.map((u) => (
+              <li key={u.id} className="likers-list__item">
+                <Link
+                  to={`/u/${u.username}`}
+                  className="likers-list__link"
+                  onClick={() => setLikersOpen(false)}
+                >
+                  <Avatar user={u} size={40} />
+                  <div style={{ minWidth: 0 }}>
+                    <span className="strong block small truncate">{u.displayName}</span>
+                    <span className="muted small truncate">@{u.username}</span>
+                  </div>
+                </Link>
+                {!u.isMe && (
+                  <button
+                    type="button"
+                    className={`btn btn--sm${u.followed ? '' : ' btn--primary'}`}
+                    onClick={() => toggleLikerFollow(u)}
+                  >
+                    {u.followed ? 'Following' : (u.requested ? 'Requested' : 'Follow')}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </Sheet>
     </article>
   );
