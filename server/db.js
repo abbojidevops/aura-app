@@ -108,12 +108,14 @@ CREATE TABLE IF NOT EXISTS posts (
   duration      DOUBLE PRECISION,
   visibility    TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','followers','private')),
   status        TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','published','failed','hidden')),
+  is_pinned     INTEGER NOT NULL DEFAULT 0,
   like_count    INTEGER NOT NULL DEFAULT 0,
   comment_count INTEGER NOT NULL DEFAULT 0,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_posts_status_created ON posts(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_posts_user_pinned ON posts(user_id, is_pinned);
 
 CREATE TABLE IF NOT EXISTS post_tags (
   post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
@@ -272,6 +274,8 @@ db.init = async () => {
       );
     `);
     await t.run('ALTER TABLE comments ADD COLUMN IF NOT EXISTS like_count INTEGER NOT NULL DEFAULT 0');
+    await t.run('ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_pinned INTEGER NOT NULL DEFAULT 0');
+    await t.run('CREATE INDEX IF NOT EXISTS idx_posts_user_pinned ON posts(user_id, is_pinned)');
     await t.run(`
       CREATE TABLE IF NOT EXISTS comment_likes (
         comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,

@@ -216,6 +216,24 @@ const openWs = (token) => new Promise((resolve) => {
   const unlikeCRes = await j(`/api/comments/${targetComment.id}/like`, { token: u2Token, method: 'DELETE' });
   check('unlike comment returns 200 and liked=false', unlikeCRes.status === 200 && unlikeCRes.data.liked === false && unlikeCRes.data.likeCount === 0);
 
+  // 9. Test Pinned Posts (POST/DELETE /api/posts/:id/pin)
+  const nonAuthorPin = await j(`/api/posts/${demoPost.id}/pin`, { token: u2Token, method: 'POST' });
+  check('non-author cannot pin post (403)', nonAuthorPin.status === 403);
+
+  const authorPin = await j(`/api/posts/${demoPost.id}/pin`, { token: demoToken, method: 'POST' });
+  check('author can pin post (200)', authorPin.status === 200 && authorPin.data.isPinned === true);
+
+  const demoProfileAfterPin = await j('/api/users/demo', { token: u2Token });
+  const firstPost = demoProfileAfterPin.data.posts?.[0];
+  check('pinned post is first on profile', firstPost?.id === demoPost.id && firstPost?.isPinned === true);
+
+  const authorUnpin = await j(`/api/posts/${demoPost.id}/pin`, { token: demoToken, method: 'DELETE' });
+  check('author can unpin post (200)', authorUnpin.status === 200 && authorUnpin.data.isPinned === false);
+
+  const demoProfileAfterUnpin = await j('/api/users/demo', { token: u2Token });
+  const unpinnedItem = demoProfileAfterUnpin.data.posts?.find((p) => p.id === demoPost.id);
+  check('post is no longer pinned on profile', unpinnedItem?.isPinned === false);
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

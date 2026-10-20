@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search, Shield, Bookmark } from 'lucide-react';
 import Avatar from './Avatar.jsx';
-import { useAuth } from '../lib/context.jsx';
+import { useAuth, useToast } from '../lib/context.jsx';
 import { api } from '../lib/api';
 import { subscribeRealtime } from '../lib/realtime';
 
@@ -13,6 +13,7 @@ export default function Shell() {
   const [unreadNotifs, setUnreadNotifs] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const immersive = location.pathname === '/reels';
+  const toast = useToast();
 
   const loadNotifs = useCallback(() => {
     api('/notifications')
@@ -42,7 +43,19 @@ export default function Shell() {
   useEffect(() => {
     return subscribeRealtime((msg) => {
       if (msg.type === 'message') loadMessages();
-      if (msg.type === 'notification') loadNotifs();
+      if (msg.type === 'notification') {
+        loadNotifs();
+        if (msg.notification && location.pathname !== '/notifications') {
+          const act = msg.notification.actor;
+          const t = msg.notification.type;
+          const actionText =
+            t === 'like' ? 'liked your post' :
+            t === 'comment' ? 'commented on your post' :
+            t === 'follow' ? 'started following you' :
+            t === 'follow_request' ? 'requested to follow you' : 'sent an update';
+          toast.show(`${act?.displayName || 'Someone'} ${actionText}`);
+        }
+      }
     });
   }, [loadMessages, loadNotifs]);
 

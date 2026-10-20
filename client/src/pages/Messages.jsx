@@ -182,7 +182,12 @@ function Thread({ id, other }) {
         {messages.map((m) => (
           <div key={m.id} className={`bubble-row${m.mine ? ' is-mine' : ''}`}>
             <div className={`bubble${m.mine ? ' bubble--mine' : ''}${m.pending ? ' is-pending' : ''} fade-up`}>
-              {m.body}
+              <div>{m.body}</div>
+              {m.createdAt && (
+                <span className="bubble-time">
+                  {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
             </div>
           </div>
         ))}
@@ -199,7 +204,20 @@ function Thread({ id, other }) {
 
       <form className="thread__composer" onSubmit={send}>
         <label className="sr-only" htmlFor="message-input">Message</label>
-        <input id="message-input" className="input" value={text} maxLength={1000} onChange={handleInputChange} placeholder="Message…" />
+        <input
+          id="message-input"
+          className="input"
+          value={text}
+          maxLength={1000}
+          onChange={handleInputChange}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder="Message…"
+        />
         <button className="btn btn--primary btn--icon" disabled={!text.trim()} aria-label="Send message"><Send size={18} /></button>
       </form>
     </div>

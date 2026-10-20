@@ -43,6 +43,7 @@ function serializePost(r) {
     duration: r.duration,
     visibility: r.visibility,
     status: r.status,
+    isPinned: !!r.is_pinned,
     likeCount: r.like_count,
     commentCount: r.comment_count,
     liked: !!r.liked,

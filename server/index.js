@@ -41,8 +41,9 @@ async function counts(userId) {
 
 async function notify(recipientId, actorId, type, postId, conn = db) {
   if (recipientId === actorId) return;
-  await conn.run('INSERT INTO notifications (user_id, actor_id, type, post_id) VALUES (?, ?, ?, ?)', [recipientId, actorId, type, postId ?? null]);
-  realtime.publish([recipientId], { type: 'notification' });
+  const row = await conn.get('INSERT INTO notifications (user_id, actor_id, type, post_id) VALUES (?, ?, ?, ?) RETURNING id, created_at', [recipientId, actorId, type, postId ?? null]);
+  const actor = await db.get('SELECT username, display_name, avatar_hue FROM users WHERE id = ?', [actorId]);
+  realtime.publish([recipientId], { type: 'notification', notification: { id: row?.id, type, postId: postId ?? null, actor: { username: actor?.username, displayName: actor?.display_name, avatarHue: actor?.avatar_hue } } });
 }
 
 function findUserByUsername(username) {
@@ -647,6 +648,33 @@ api.patch('/posts/:id', wrap(async (req, res) => {
   res.json({ post: serializePost(post) });
 }));
 
+
+api.post('/posts/:id/pin', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const row = await db.get('SELECT user_id, is_pinned FROM posts WHERE id = ?', [id]);
+  if (!row) return notFound(res, 'Post not found.');
+  if (row.user_id !== me(req)) return res.status(403).json({ error: 'You can only pin your own posts.' });
+  if (row.is_pinned) return res.json({ isPinned: true });
+
+  const { count } = await db.get('SELECT COUNT(*) AS count FROM posts WHERE user_id = ? AND is_pinned = 1', [me(req)]);
+  if (Number(count) >= 3) {
+    return bad(res, 'You can pin up to 3 posts to your profile.');
+  }
+
+  await db.run('UPDATE posts SET is_pinned = 1 WHERE id = ?', [id]);
+  res.json({ isPinned: true });
+}));
+
+api.delete('/posts/:id/pin', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const row = await db.get('SELECT user_id FROM posts WHERE id = ?', [id]);
+  if (!row) return notFound(res, 'Post not found.');
+  if (row.user_id !== me(req)) return res.status(403).json({ error: 'You can only unpin your own posts.' });
+
+  await db.run('UPDATE posts SET is_pinned = 0 WHERE id = ?', [id]);
+  res.json({ isPinned: false });
+}));
+
 api.post('/posts/:id/like', wrap(async (req, res) => {
   const id = Number(req.params.id);
   const post = await getVisiblePost(me(req), id);
@@ -835,7 +863,7 @@ api.get('/users/:username', wrap(async (req, res) => {
     const statuses = isMe ? "('published','processing','hidden')" : "('published')";
     const rows = await db.all(`${POST_SELECT}
       WHERE p.user_id = @uid AND p.status IN ${statuses} AND ${VISIBLE}
-      ORDER BY p.created_at DESC LIMIT 60`, { me: viewer, uid: user.id });
+      ORDER BY p.is_pinned DESC, p.created_at DESC LIMIT 60`, { me: viewer, uid: user.id });
     await attachTags(rows);
     posts = rows.map(serializePost);
   }

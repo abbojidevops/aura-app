@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info } from 'lucide-react';
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
@@ -53,6 +53,17 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
             : u
         )
       );
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
+
+  const togglePin = async () => {
+    setMenuOpen(false);
+    try {
+      const res = await api(`/posts/${post.id}/pin`, { method: post.isPinned ? 'DELETE' : 'POST' });
+      patch?.({ isPinned: res.isPinned });
+      toast.show(res.isPinned ? 'Post pinned to your profile' : 'Post unpinned from profile');
     } catch (err) {
       toast.show(err.message);
     }
@@ -117,7 +128,14 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
           <Avatar user={post.author} size={36} ring />
           <span className="post__names">
             <span className="strong">@{post.author.username}</span>
-            <span className="muted small">{timeAgo(post.createdAt)}</span>
+            <span className="muted small">
+              {timeAgo(post.createdAt)}
+              {post.isPinned && (
+                <span className="post__pinned" title="Pinned to profile">
+                  {' · '}<Pin size={11} fill="currentColor" style={{ verticalAlign: -1 }} /> Pinned
+                </span>
+              )}
+            </span>
           </span>
         </Link>
         <button className="icon-btn" onClick={() => setMenuOpen(true)} aria-label="More options">
@@ -184,6 +202,11 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title="Post options">
         <div className="menu">
           <button className="menu__item" onClick={() => { setMenuOpen(false); sharePost(post, toast); }}><LinkIcon size={18} /> Copy link</button>
+          {isMine && (
+            <button className="menu__item" onClick={togglePin}>
+              <Pin size={18} /> {post.isPinned ? 'Unpin from profile' : 'Pin to profile'}
+            </button>
+          )}
           {isMine && <button className="menu__item" onClick={startEdit}><Edit3 size={18} /> Edit caption</button>}
           {!isMine && <button className="menu__item" onClick={() => { setMenuOpen(false); setReportOpen(true); }}><Flag size={18} /> Report</button>}
           {isMine && <button className="menu__item menu__item--danger" onClick={remove}><Trash2 size={18} /> Delete post</button>}
