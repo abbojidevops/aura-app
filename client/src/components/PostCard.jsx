@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin } from 'lucide-react';
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin, FolderPlus } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
@@ -25,6 +25,10 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   const [likersOpen, setLikersOpen] = useState(false);
   const [likers, setLikers] = useState(null);
   const [likersLoading, setLikersLoading] = useState(false);
+  const [colPickerOpen, setColPickerOpen] = useState(false);
+  const [collections, setCollections] = useState(null);
+  const [colLoading, setColLoading] = useState(false);
+  const [newColName, setNewColName] = useState('');
   const isMine = user && post.author.id === user.id;
 
   const openLikers = async () => {
@@ -119,6 +123,43 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
     }
   };
 
+  const openColPicker = () => {
+    setMenuOpen(false);
+    setColPickerOpen(true);
+    setColLoading(true);
+    api('/me/collections')
+      .then((d) => setCollections(d.collections || []))
+      .catch((e) => toast.show(e.message))
+      .finally(() => setColLoading(false));
+  };
+
+  const addToCollection = async (colId, colName) => {
+    try {
+      await api(`/me/collections/${colId}/posts`, { method: 'POST', body: { postId: post.id } });
+      patch?.({ saved: true });
+      setColPickerOpen(false);
+      toast.show(`Saved to ${colName}`);
+    } catch (e) {
+      toast.show(e.message);
+    }
+  };
+
+  const createAndAddToCollection = async (e) => {
+    e.preventDefault();
+    const name = newColName.trim();
+    if (!name) return;
+    try {
+      const res = await api('/me/collections', { method: 'POST', body: { name } });
+      await api(`/me/collections/${res.collection.id}/posts`, { method: 'POST', body: { postId: post.id } });
+      patch?.({ saved: true });
+      setNewColName('');
+      setColPickerOpen(false);
+      toast.show(`Saved to ${res.collection.name}`);
+    } catch (e) {
+      toast.show(e.message);
+    }
+  };
+
   const ratio = post.width && post.height ? post.width / post.height : 4 / 5;
 
   return (
@@ -202,6 +243,9 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title="Post options">
         <div className="menu">
           <button className="menu__item" onClick={() => { setMenuOpen(false); sharePost(post, toast); }}><LinkIcon size={18} /> Copy link</button>
+          <button className="menu__item" onClick={openColPicker}>
+            <Bookmark size={18} /> Save to collection…
+          </button>
           {isMine && (
             <button className="menu__item" onClick={togglePin}>
               <Pin size={18} /> {post.isPinned ? 'Unpin from profile' : 'Pin to profile'}
@@ -265,6 +309,40 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
               </li>
             ))}
           </ul>
+        )}
+      </Sheet>
+      <Sheet open={colPickerOpen} onClose={() => setColPickerOpen(false)} title="Save to collection">
+        {colLoading && <div className="center-pad"><Spinner /></div>}
+        {!colLoading && (
+          <div className="stack" style={{ gap: 12 }}>
+            <form onSubmit={createAndAddToCollection} className="row" style={{ gap: 8 }}>
+              <input
+                className="input input--sm"
+                value={newColName}
+                onChange={(e) => setNewColName(e.target.value)}
+                placeholder="New collection name…"
+                maxLength={50}
+              />
+              <button className="btn btn--sm btn--primary" disabled={!newColName.trim()} type="submit">Create</button>
+            </form>
+            <div className="menu" style={{ maxHeight: 240, overflowY: 'auto' }}>
+              {collections?.map((col) => (
+                <button
+                  key={col.id}
+                  type="button"
+                  className="menu__item"
+                  onClick={() => addToCollection(col.id, col.name)}
+                >
+                  <FolderPlus size={18} />
+                  <span className="truncate">{col.name}</span>
+                  <span className="muted small" style={{ marginLeft: 'auto' }}>{col.postCount}</span>
+                </button>
+              ))}
+              {collections?.length === 0 && (
+                <p className="muted small center-pad">No collections yet. Create one above.</p>
+              )}
+            </div>
+          </div>
         )}
       </Sheet>
     </article>

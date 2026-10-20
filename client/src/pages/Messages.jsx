@@ -90,18 +90,30 @@ export default function Messages() {
   );
 }
 
+const QUICK_EMOJIS = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
+
 function Thread({ id, other }) {
   const toast = useToast();
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [hoveredId, setHoveredId] = useState(null);
   const lastId = useRef(0);
   const list = useRef(null);
 
   const [otherTyping, setOtherTyping] = useState(false);
   const typingTimer = useRef(null);
   const lastTypingSent = useRef(0);
+
+  const reloadAll = useCallback(async () => {
+    const d = await api(`/messages/${id}`);
+    setMessages(d.messages || []);
+    if (d.messages?.length) {
+      lastId.current = d.messages[d.messages.length - 1].id;
+    }
+    setLoaded(true);
+  }, [id]);
 
   const fetchNew = useCallback(async () => {
     const d = await api(`/messages/${id}?after=${lastId.current}`);
@@ -115,22 +127,34 @@ function Thread({ id, other }) {
   const live = useRealtimeLive();
 
   useEffect(() => {
-    fetchNew().catch(() => setLoaded(true));
+    reloadAll().catch(() => setLoaded(true));
     const t = setInterval(() => fetchNew().catch(() => {}), live ? 30000 : 3000);
     return () => clearInterval(t);
-  }, [fetchNew, live]);
+  }, [reloadAll, fetchNew, live]);
 
   useEffect(() => subscribeRealtime((m) => {
     if (m.type === 'message' && String(m.conversationId) === String(id)) {
       setOtherTyping(false);
       fetchNew().catch(() => {});
     }
+    if (m.type === 'reaction' && String(m.conversationId) === String(id)) {
+      reloadAll().catch(() => {});
+    }
     if (m.type === 'typing' && String(m.conversationId) === String(id) && m.userId === other.id) {
       setOtherTyping(true);
       clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setOtherTyping(false), 3500);
     }
-  }), [fetchNew, id, other.id]);
+  }), [fetchNew, reloadAll, id, other.id]);
+
+  const toggleReaction = async (messageId, emoji) => {
+    try {
+      await api(`/messages/${id}/react`, { method: 'POST', body: { messageId, emoji } });
+      await reloadAll();
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
 
   useEffect(() => {
     list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' });
@@ -180,13 +204,56 @@ function Thread({ id, other }) {
         {!loaded && <div className="center-pad"><Spinner /></div>}
         {loaded && messages.length === 0 && <p className="muted center-pad">No messages yet. Say hello.</p>}
         {messages.map((m) => (
-          <div key={m.id} className={`bubble-row${m.mine ? ' is-mine' : ''}`}>
-            <div className={`bubble${m.mine ? ' bubble--mine' : ''}${m.pending ? ' is-pending' : ''} fade-up`}>
-              <div>{m.body}</div>
-              {m.createdAt && (
-                <span className="bubble-time">
-                  {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
+          <div
+            key={m.id}
+            className={`bubble-row${m.mine ? ' is-mine' : ''}`}
+            onMouseEnter={() => setHoveredId(m.id)}
+            onMouseLeave={() => setHoveredId((h) => (h === m.id ? null : h))}
+          >
+            <div className="bubble-container">
+              <div className="bubble-actions-wrap">
+                <div
+                  className={`bubble${m.mine ? ' bubble--mine' : ''}${m.pending ? ' is-pending' : ''} fade-up`}
+                  onClick={() => setHoveredId((h) => (h === m.id ? null : m.id))}
+                >
+                  <div>{m.body}</div>
+                  {m.createdAt && (
+                    <span className="bubble-time">
+                      {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+                {hoveredId === m.id && !m.pending && (
+                  <div className="quick-reactions fade-up">
+                    {QUICK_EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className="quick-reaction-btn"
+                        onClick={() => toggleReaction(m.id, emoji)}
+                        title={`React with ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {m.reactions && m.reactions.length > 0 && (
+                <div className="bubble-reactions">
+                  {m.reactions.map((r) => (
+                    <button
+                      key={r.emoji}
+                      type="button"
+                      className={`bubble-reaction${r.reacted ? ' is-active' : ''}`}
+                      onClick={() => toggleReaction(m.id, r.emoji)}
+                      title={`${r.count} ${r.emoji}`}
+                    >
+                      <span>{r.emoji}</span>
+                      {r.count > 1 && <span className="bubble-reaction__count">{r.count}</span>}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </div>

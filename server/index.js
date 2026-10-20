@@ -329,6 +329,8 @@ api.get('/me/export', wrap(async (req, res) => {
     comments: await db.all('SELECT post_id, body, created_at FROM comments WHERE user_id = ?', [uid]),
     likes: await db.all('SELECT post_id, created_at FROM likes WHERE user_id = ?', [uid]),
     saves: await db.all('SELECT post_id, created_at FROM saves WHERE user_id = ?', [uid]),
+    collections: await db.all('SELECT id, name, created_at FROM collections WHERE user_id = ?', [uid]),
+    blockedUsers: await db.all('SELECT u.username, b.created_at FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.blocker_id = ?', [uid]),
     following: await db.all('SELECT u.username, f.created_at FROM follows f JOIN users u ON u.id = f.following_id WHERE f.follower_id = ?', [uid]),
     followers: await db.all('SELECT u.username, f.created_at FROM follows f JOIN users u ON u.id = f.follower_id WHERE f.following_id = ?', [uid]),
     messagesSent: await db.all('SELECT conversation_id, body, created_at FROM messages WHERE sender_id = ?', [uid]),
@@ -380,6 +382,84 @@ api.get('/me/saved', wrap(async (req, res) => {
     ORDER BY s.created_at DESC LIMIT 60`, { me: viewerId });
   await attachTags(rows);
   res.json({ posts: rows.map(serializePost) });
+}));
+
+// ----- Saved Collections -----
+api.get('/me/collections', wrap(async (req, res) => {
+  const uid = me(req);
+  const rows = await db.all(`
+    SELECT c.id, c.name, c.created_at,
+      COUNT(cp.post_id)::integer AS post_count,
+      (SELECT p.thumb_url FROM collection_posts cp2 JOIN posts p ON p.id = cp2.post_id WHERE cp2.collection_id = c.id ORDER BY cp2.created_at DESC LIMIT 1) AS cover_thumb,
+      (SELECT p.media_url FROM collection_posts cp2 JOIN posts p ON p.id = cp2.post_id WHERE cp2.collection_id = c.id ORDER BY cp2.created_at DESC LIMIT 1) AS cover_media
+    FROM collections c
+    LEFT JOIN collection_posts cp ON cp.collection_id = c.id
+    WHERE c.user_id = ?
+    GROUP BY c.id
+    ORDER BY c.created_at DESC`, [uid]);
+  res.json({
+    collections: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      createdAt: r.created_at,
+      postCount: r.post_count || 0,
+      coverThumb: mediaUrl(r.cover_thumb || r.cover_media),
+    })),
+  });
+}));
+
+api.post('/me/collections', wrap(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name || name.length > 50) return bad(res, 'Collection name must be 1 to 50 characters.');
+  const row = await db.get('INSERT INTO collections (user_id, name) VALUES (?, ?) RETURNING id, name, created_at', [me(req), name]);
+  res.status(201).json({
+    collection: { id: row.id, name: row.name, createdAt: row.created_at, postCount: 0, coverThumb: null },
+  });
+}));
+
+api.get('/me/collections/:id', wrap(async (req, res) => {
+  const colId = Number(req.params.id);
+  const col = await db.get('SELECT id, name, created_at FROM collections WHERE id = ? AND user_id = ?', [colId, me(req)]);
+  if (!col) return notFound(res, 'Collection not found.');
+  const rows = await db.all(`
+    ${POST_SELECT}
+    JOIN collection_posts cp ON cp.post_id = p.id
+    WHERE cp.collection_id = @colId AND (p.status = 'published' OR p.user_id = @me) AND ${VISIBLE}
+    ORDER BY cp.created_at DESC`, { me: me(req), colId });
+  await attachTags(rows);
+  res.json({
+    collection: { id: col.id, name: col.name, createdAt: col.created_at },
+    posts: rows.map(serializePost),
+  });
+}));
+
+api.delete('/me/collections/:id', wrap(async (req, res) => {
+  const colId = Number(req.params.id);
+  const r = await db.run('DELETE FROM collections WHERE id = ? AND user_id = ?', [colId, me(req)]);
+  if (!r.changes) return notFound(res, 'Collection not found.');
+  res.json({ ok: true });
+}));
+
+api.post('/me/collections/:id/posts', wrap(async (req, res) => {
+  const colId = Number(req.params.id);
+  const postId = Number(req.body?.postId);
+  if (!postId) return bad(res, 'Post ID is required.');
+  const col = await db.get('SELECT id FROM collections WHERE id = ? AND user_id = ?', [colId, me(req)]);
+  if (!col) return notFound(res, 'Collection not found.');
+  const post = await getVisiblePost(me(req), postId);
+  if (!post) return notFound(res, 'This post is unavailable.');
+  await db.run('INSERT INTO saves (user_id, post_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [me(req), postId]);
+  await db.run('INSERT INTO collection_posts (collection_id, post_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [colId, postId]);
+  res.json({ ok: true });
+}));
+
+api.delete('/me/collections/:id/posts/:postId', wrap(async (req, res) => {
+  const colId = Number(req.params.id);
+  const postId = Number(req.params.postId);
+  const col = await db.get('SELECT id FROM collections WHERE id = ? AND user_id = ?', [colId, me(req)]);
+  if (!col) return notFound(res, 'Collection not found.');
+  await db.run('DELETE FROM collection_posts WHERE collection_id = ? AND post_id = ?', [colId, postId]);
+  res.json({ ok: true });
 }));
 
 // ----- Feed settings: mood mode and transparent slider weights -----
@@ -754,6 +834,11 @@ api.get('/posts/:id/comments', wrap(async (req, res) => {
     FROM comments c
     JOIN users u ON u.id = c.user_id
     WHERE c.post_id = @id
+      AND NOT EXISTS (
+        SELECT 1 FROM blocks b
+        WHERE (b.blocker_id = @me AND b.blocked_id = c.user_id)
+           OR (b.blocker_id = c.user_id AND b.blocked_id = @me)
+      )
     ORDER BY c.id ASC LIMIT 200`, { id, me: myId });
   res.json({
     comments: rows.map((c) => ({
@@ -771,6 +856,11 @@ api.post('/posts/:id/comments', wrap(async (req, res) => {
   const id = Number(req.params.id);
   const post = await getVisiblePost(me(req), id);
   if (!post) return notFound(res, 'This post is unavailable.');
+  const isBlocked = !!(await db.get(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [me(req), post.user_id, post.user_id, me(req)]
+  ));
+  if (isBlocked) return res.status(403).json({ error: 'You cannot comment on this post.' });
   const body = String(req.body?.body || '').trim();
   if (!body) return bad(res, 'Write something before posting.');
   if (body.length > 500) return bad(res, 'Comments can be up to 500 characters.');
@@ -855,9 +945,13 @@ api.get('/users/:username', wrap(async (req, res) => {
   if (!user) return notFound(res, 'This account doesn’t exist.');
   const viewer = me(req);
   const isMe = user.id === viewer;
-  const followed = !!(await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewer, user.id]));
-  const locked = !!user.is_private && !isMe && !followed;
-  const requested = !followed && !!(await db.get('SELECT 1 FROM follow_requests WHERE requester_id = ? AND target_id = ?', [viewer, user.id]));
+  const blockedByMe = !isMe && !!(await db.get('SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?', [viewer, user.id]));
+  const blockedByTarget = !isMe && !!(await db.get('SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?', [user.id, viewer]));
+  const isBlocked = blockedByMe || blockedByTarget;
+
+  const followed = !isBlocked && !!(await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewer, user.id]));
+  const locked = isBlocked || (!!user.is_private && !isMe && !followed);
+  const requested = !isBlocked && !followed && !!(await db.get('SELECT 1 FROM follow_requests WHERE requester_id = ? AND target_id = ?', [viewer, user.id]));
   let posts = [];
   if (!locked) {
     const statuses = isMe ? "('published','processing','hidden')" : "('published')";
@@ -870,6 +964,9 @@ api.get('/users/:username', wrap(async (req, res) => {
   res.json({
     user: { ...userPublic(user), ...(await counts(user.id)) },
     isMe, followed, locked, requested, posts,
+    blocked: isBlocked,
+    blockedByMe,
+    blockedByTarget,
   });
 }));
 
@@ -877,6 +974,12 @@ api.post('/users/:username/follow', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target) return notFound(res, 'Account not found.');
   if (target.id === me(req)) return bad(res, 'You cannot follow yourself.');
+
+  const isBlocked = !!(await db.get(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [me(req), target.id, target.id, me(req)]
+  ));
+  if (isBlocked) return res.status(403).json({ error: 'You cannot follow this user.' });
 
   if (target.is_private) {
     const already = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [me(req), target.id]);
@@ -893,6 +996,43 @@ api.post('/users/:username/follow', wrap(async (req, res) => {
   res.json({ followed: true, requested: false, followers: (await counts(target.id)).followers });
 }));
 
+api.post('/users/:username/block', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target) return notFound(res, 'Account not found.');
+  if (target.id === me(req)) return bad(res, 'You cannot block yourself.');
+  await db.tx(async (t) => {
+    await t.run('INSERT INTO blocks (blocker_id, blocked_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [me(req), target.id]);
+    await t.run('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)', [me(req), target.id, target.id, me(req)]);
+    await t.run('DELETE FROM follow_requests WHERE (requester_id = ? AND target_id = ?) OR (requester_id = ? AND target_id = ?)', [me(req), target.id, target.id, me(req)]);
+  });
+  res.json({ blocked: true });
+}));
+
+api.delete('/users/:username/block', wrap(async (req, res) => {
+  const target = await findUserByUsername(req.params.username);
+  if (!target) return notFound(res, 'Account not found.');
+  await db.run('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?', [me(req), target.id]);
+  res.json({ blocked: false });
+}));
+
+api.get('/me/blocks', wrap(async (req, res) => {
+  const rows = await db.all(`
+    SELECT u.id, u.username, u.display_name, u.avatar_hue, b.created_at
+    FROM blocks b
+    JOIN users u ON u.id = b.blocked_id
+    WHERE b.blocker_id = ?
+    ORDER BY b.created_at DESC`, [me(req)]);
+  res.json({
+    blocks: rows.map((r) => ({
+      id: r.id,
+      username: r.username,
+      displayName: r.display_name,
+      avatarHue: r.avatar_hue,
+      createdAt: r.created_at,
+    })),
+  });
+}));
+
 api.delete('/users/:username/follow', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target) return notFound(res, 'Account not found.');
@@ -905,6 +1045,11 @@ api.get('/users/:username/followers', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target || target.suspended_at) return notFound(res, 'Account not found.');
   const viewerId = me(req);
+  const isBlocked = target.id !== viewerId && !!(await db.get(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [viewerId, target.id, target.id, viewerId]
+  ));
+  if (isBlocked) return res.status(403).json({ error: 'This account is unavailable.' });
   if (target.is_private && target.id !== viewerId) {
     const isFollowing = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewerId, target.id]);
     if (!isFollowing) return res.status(403).json({ error: 'This account is private.' });
@@ -935,6 +1080,11 @@ api.get('/users/:username/following', wrap(async (req, res) => {
   const target = await findUserByUsername(req.params.username);
   if (!target || target.suspended_at) return notFound(res, 'Account not found.');
   const viewerId = me(req);
+  const isBlocked = target.id !== viewerId && !!(await db.get(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [viewerId, target.id, target.id, viewerId]
+  ));
+  if (isBlocked) return res.status(403).json({ error: 'This account is unavailable.' });
   if (target.is_private && target.id !== viewerId) {
     const isFollowing = await db.get('SELECT 1 FROM follows WHERE follower_id = ? AND following_id = ?', [viewerId, target.id]);
     if (!isFollowing) return res.status(403).json({ error: 'This account is private.' });
@@ -1011,6 +1161,11 @@ api.post('/messages/start', wrap(async (req, res) => {
   const target = await findUserByUsername(String(req.body?.username || ''));
   if (!target) return notFound(res, 'Account not found.');
   if (target.id === me(req)) return bad(res, 'You cannot message yourself.');
+  const isBlocked = !!(await db.get(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [me(req), target.id, target.id, me(req)]
+  ));
+  if (isBlocked) return res.status(403).json({ error: 'You cannot message this user.' });
   const existing = await db.get(`SELECT c.id FROM conversations c
     JOIN conversation_members a ON a.conversation_id = c.id AND a.user_id = ?
     JOIN conversation_members b ON b.conversation_id = c.id AND b.user_id = ?
@@ -1040,12 +1195,49 @@ api.get('/messages/:id', wrap(async (req, res) => {
     const last = msgs[msgs.length - 1].id;
     await db.run('UPDATE conversation_members SET last_read_id = GREATEST(last_read_id, ?) WHERE conversation_id = ? AND user_id = ?', [last, id, me(req)]);
   }
-  res.json({ messages: msgs.map((m) => ({ id: m.id, mine: m.sender_id === me(req), body: m.body, createdAt: m.created_at })) });
+  const msgIds = msgs.map((m) => m.id);
+  const reactionsByMsg = new Map();
+  if (msgIds.length) {
+    const rRows = await db.all(
+      `SELECT message_id, emoji, user_id FROM message_reactions WHERE message_id IN (${msgIds.map(() => '?').join(',')})`,
+      msgIds
+    );
+    for (const r of rRows) {
+      if (!reactionsByMsg.has(r.message_id)) reactionsByMsg.set(r.message_id, []);
+      reactionsByMsg.get(r.message_id).push(r);
+    }
+  }
+  res.json({
+    messages: msgs.map((m) => {
+      const rawReactions = reactionsByMsg.get(m.id) || [];
+      const groupMap = new Map();
+      for (const r of rawReactions) {
+        if (!groupMap.has(r.emoji)) groupMap.set(r.emoji, { emoji: r.emoji, count: 0, reacted: false });
+        const g = groupMap.get(r.emoji);
+        g.count += 1;
+        if (r.user_id === me(req)) g.reacted = true;
+      }
+      return {
+        id: m.id,
+        mine: m.sender_id === me(req),
+        body: m.body,
+        createdAt: m.created_at,
+        reactions: [...groupMap.values()],
+      };
+    }),
+  });
 }));
 
 api.post('/messages/:id', wrap(async (req, res) => {
   const id = await assertMember(req, res);
   if (!id) return;
+  const isBlocked = !!(await db.get(`
+    SELECT 1 FROM blocks b
+    JOIN conversation_members cm1 ON cm1.conversation_id = ? AND b.blocker_id = cm1.user_id
+    JOIN conversation_members cm2 ON cm2.conversation_id = ? AND b.blocked_id = cm2.user_id
+  `, [id, id]));
+  if (isBlocked) return res.status(403).json({ error: 'You cannot send messages in this conversation.' });
+
   const body = String(req.body?.body || '').trim();
   if (!body) return bad(res, 'Message cannot be empty.');
   if (body.length > 1000) return bad(res, 'Messages can be up to 1000 characters.');
@@ -1054,6 +1246,41 @@ api.post('/messages/:id', wrap(async (req, res) => {
   const members = await db.all('SELECT user_id FROM conversation_members WHERE conversation_id = ?', [id]);
   realtime.publish(members.map((m) => m.user_id), { type: 'message', conversationId: id });
   res.status(201).json({ id: row.id });
+}));
+
+api.post('/messages/:id/react', wrap(async (req, res) => {
+  const convId = await assertMember(req, res);
+  if (!convId) return;
+  const messageId = Number(req.body?.messageId);
+  const emoji = String(req.body?.emoji || '').trim();
+  if (!messageId || !emoji) return bad(res, 'Message ID and emoji are required.');
+
+  const msg = await db.get('SELECT id FROM messages WHERE id = ? AND conversation_id = ?', [messageId, convId]);
+  if (!msg) return notFound(res, 'Message not found.');
+
+  const existing = await db.get('SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ?', [messageId, me(req)]);
+  let reacted = true;
+  if (existing && existing.emoji === emoji) {
+    await db.run('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?', [messageId, me(req)]);
+    reacted = false;
+  } else {
+    await db.run(
+      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?) ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = excluded.emoji',
+      [messageId, me(req), emoji]
+    );
+  }
+
+  const members = await db.all('SELECT user_id FROM conversation_members WHERE conversation_id = ?', [convId]);
+  realtime.publish(members.map((m) => m.user_id), {
+    type: 'reaction',
+    conversationId: convId,
+    messageId,
+    emoji,
+    reacted,
+    userId: me(req),
+  });
+
+  res.json({ ok: true, messageId, emoji, reacted });
 }));
 
 // ----- Admin moderation tools -----

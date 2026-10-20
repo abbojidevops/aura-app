@@ -234,6 +234,67 @@ const openWs = (token) => new Promise((resolve) => {
   const unpinnedItem = demoProfileAfterUnpin.data.posts?.find((p) => p.id === demoPost.id);
   check('post is no longer pinned on profile', unpinnedItem?.isPinned === false);
 
+  // 10. Test Saved Collections
+  const createCol = await j('/api/me/collections', { token: demoToken, method: 'POST', body: { name: 'Inspiration' } });
+  check('create collection (201)', createCol.status === 201 && createCol.data.collection?.name === 'Inspiration');
+  const colId = createCol.data.collection.id;
+
+  const listCols = await j('/api/me/collections', { token: demoToken });
+  check('list collections returns created collection', listCols.status === 200 && listCols.data.collections?.some((c) => c.id === colId));
+
+  const addPostToCol = await j(`/api/me/collections/${colId}/posts`, { token: demoToken, method: 'POST', body: { postId: demoPost.id } });
+  check('add post to collection (200)', addPostToCol.status === 200 && addPostToCol.data.ok === true);
+
+  const getCol = await j(`/api/me/collections/${colId}`, { token: demoToken });
+  check('get collection includes added post', getCol.status === 200 && getCol.data.posts?.some((p) => p.id === demoPost.id));
+
+  const removePostFromCol = await j(`/api/me/collections/${colId}/posts/${demoPost.id}`, { token: demoToken, method: 'DELETE' });
+  check('remove post from collection (200)', removePostFromCol.status === 200 && removePostFromCol.data.ok === true);
+
+  const getColAfterRemove = await j(`/api/me/collections/${colId}`, { token: demoToken });
+  check('collection empty after post removed', getColAfterRemove.status === 200 && getColAfterRemove.data.posts?.length === 0);
+
+  const deleteCol = await j(`/api/me/collections/${colId}`, { token: demoToken, method: 'DELETE' });
+  check('delete collection (200)', deleteCol.status === 200 && deleteCol.data.ok === true);
+
+  // 11. Test Message Reactions
+  const sendMsg = await j(`/api/messages/${convoId}`, { token: demoToken, method: 'POST', body: { body: 'Testing reactions!' } });
+  check('send message in chat (201)', sendMsg.status === 201 && !!sendMsg.data.id);
+  const msgId = sendMsg.data.id;
+
+  const reactHeart = await j(`/api/messages/${convoId}/react`, { token: u2Token, method: 'POST', body: { messageId: msgId, emoji: '❤️' } });
+  check('react to message returns 200 and reacted=true', reactHeart.status === 200 && reactHeart.data.reacted === true);
+
+  await new Promise((r) => setTimeout(r, 100));
+  const reactionEvent = demoWs.events.find((e) => e.type === 'reaction' && e.messageId === msgId);
+  check('demo receives realtime reaction event over ws', !!reactionEvent && reactionEvent.emoji === '❤️');
+
+  const getMsgsWithReactions = await j(`/api/messages/${convoId}`, { token: demoToken });
+  const reactedMsg = getMsgsWithReactions.data.messages?.find((m) => m.id === msgId);
+  check('message reflects reaction count=1', reactedMsg?.reactions?.find((r) => r.emoji === '❤️')?.count === 1);
+
+  const unreactHeart = await j(`/api/messages/${convoId}/react`, { token: u2Token, method: 'POST', body: { messageId: msgId, emoji: '❤️' } });
+  check('toggle off reaction returns 200 and reacted=false', unreactHeart.status === 200 && unreactHeart.data.reacted === false);
+
+  // 12. Test User Blocking & Safety Shield
+  const blockRes = await j(`/api/users/${u3Name}/block`, { token: demoToken, method: 'POST' });
+  check('demo blocks user 3 (200)', blockRes.status === 200 && blockRes.data.blocked === true);
+
+  const blocksList = await j('/api/me/blocks', { token: demoToken });
+  check('blocks list contains user 3', blocksList.status === 200 && blocksList.data.blocks?.some((b) => b.username === u3Name));
+
+  const followBlocked = await j(`/api/users/${u3Name}/follow`, { token: demoToken, method: 'POST' });
+  check('cannot follow blocked user (403)', followBlocked.status === 403);
+
+  const blockedFollowsDemo = await j('/api/users/demo/follow', { token: u3Token, method: 'POST' });
+  check('blocked user cannot follow blocker (403)', blockedFollowsDemo.status === 403);
+
+  const u3ViewsDemoProfile = await j('/api/users/demo', { token: u3Token });
+  check('blocked user cannot see demo profile posts', u3ViewsDemoProfile.status === 200 && u3ViewsDemoProfile.data.blocked === true && u3ViewsDemoProfile.data.posts.length === 0);
+
+  const unblockRes = await j(`/api/users/${u3Name}/block`, { token: demoToken, method: 'DELETE' });
+  check('unblock user 3 (200)', unblockRes.status === 200 && unblockRes.data.blocked === false);
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

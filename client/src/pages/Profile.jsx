@@ -1,7 +1,7 @@
 // Profile: identity, counts, follow or message, and a grid of posts, reels or saved items.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Grid3x3, Clapperboard, Bookmark, Lock, Play, Image as ImageIcon, Settings as SettingsIcon, MessageCircle, Pin } from 'lucide-react';
+import { Grid3x3, Clapperboard, Bookmark, Lock, Play, Image as ImageIcon, Settings as SettingsIcon, MessageCircle, Pin, MoreHorizontal, UserX } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import Sheet from '../components/Sheet.jsx';
 import { ErrorState, Spinner, EmptyState } from '../components/Feedback.jsx';
@@ -21,6 +21,7 @@ export default function Profile() {
   const [followModal, setFollowModal] = useState(null);
   const [followUsers, setFollowUsers] = useState(null);
   const [followLoading, setFollowLoading] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
 
   const load = () => {
     setError('');
@@ -38,6 +39,19 @@ export default function Profile() {
   if (!data) return <div className="center-pad"><Spinner /></div>;
 
   const { user, isMe, followed, locked, requested } = data;
+
+  const toggleBlock = async () => {
+    setActionMenuOpen(false);
+    const willBlock = !data.blockedByMe;
+    if (willBlock && !window.confirm(`Block @${username}? They won't be able to find your profile, posts, or message you. Any mutual follows will be removed.`)) return;
+    try {
+      await api(`/users/${username}/block`, { method: willBlock ? 'POST' : 'DELETE' });
+      toast.show(willBlock ? `@${username} blocked` : `@${username} unblocked`);
+      load();
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
 
   const toggleFollow = async () => {
     try {
@@ -103,12 +117,17 @@ export default function Profile() {
                 <>
                   <Link to="/settings" className="btn btn--sm"><SettingsIcon size={16} /> Edit profile</Link>
                 </>
-              ) : (
+              ) : data.blockedByMe ? (
+                <button className="btn btn--sm btn--primary" onClick={toggleBlock}>Unblock</button>
+              ) : data.blockedByTarget ? null : (
                 <>
                   <button className={`btn btn--sm${followed || requested ? '' : ' btn--primary'}`} onClick={toggleFollow}>
                     {followed ? 'Following' : requested ? 'Requested' : 'Follow'}
                   </button>
                   <button className="btn btn--sm" onClick={message}><MessageCircle size={16} /> Message</button>
+                  <button className="icon-btn" onClick={() => setActionMenuOpen(true)} aria-label="More options">
+                    <MoreHorizontal size={18} />
+                  </button>
                 </>
               )}
             </div>
@@ -144,7 +163,18 @@ export default function Profile() {
         </div>
       </header>
 
-      {locked ? (
+      {data.blockedByMe ? (
+        <div className="blocked-banner fade-up">
+          <UserX size={36} style={{ color: 'var(--muted)' }} />
+          <p className="strong">You blocked @{user.username}</p>
+          <p className="muted small">You cannot see their posts or message each other.</p>
+          <button className="btn btn--sm btn--primary" onClick={toggleBlock}>Unblock</button>
+        </div>
+      ) : data.blockedByTarget ? (
+        <EmptyState icon={UserX} title="Account unavailable">
+          This account is not available.
+        </EmptyState>
+      ) : locked ? (
         <EmptyState icon={Lock} title="This account is private">Follow @{user.username} to see their posts.</EmptyState>
       ) : (
         <>
@@ -218,6 +248,14 @@ export default function Profile() {
           )}
         </Sheet>
       )}
+
+      <Sheet open={actionMenuOpen} onClose={() => setActionMenuOpen(false)} title="Options">
+        <div className="menu">
+          <button className="menu__item menu__item--danger" onClick={toggleBlock}>
+            <UserX size={18} /> Block @{user.username}
+          </button>
+        </div>
+      </Sheet>
     </div>
   );
 }

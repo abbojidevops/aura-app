@@ -5,8 +5,10 @@ const { mediaUrl } = require('./urls');
 
 // A post is visible to the viewer if: they own it, or it's public and the author is public,
 // or they follow the author and the post is public/followers-only. Private posts are owner-only.
+// In addition, blocked users (in either direction) cannot view each other's posts.
 const FOLLOWED = 'EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = @me AND f.following_id = p.user_id)';
-const VISIBLE = `(p.user_id = @me OR (p.visibility IN ('public','followers') AND ((u.is_private = 0 AND p.visibility = 'public') OR ${FOLLOWED})))`;
+const BLOCKED = 'NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.blocker_id = @me AND b.blocked_id = p.user_id) OR (b.blocker_id = p.user_id AND b.blocked_id = @me))';
+const VISIBLE = `(p.user_id = @me OR (p.visibility IN ('public','followers') AND ((u.is_private = 0 AND p.visibility = 'public') OR ${FOLLOWED}) AND ${BLOCKED}))`;
 
 const POST_SELECT = `
 SELECT p.*, u.username, u.display_name, u.avatar_hue, u.is_private AS author_private,

@@ -1,7 +1,7 @@
 // Settings: appearance, profile, wellbeing, security, privacy, data export, and account deletion.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sun, Moon, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTriangle } from 'lucide-react';
+import { Sun, Moon, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTriangle, UserX } from 'lucide-react';
 import { api, getToken } from '../lib/api';
 import { useAuth, useTheme, useToast } from '../lib/context.jsx';
 import Sheet from '../components/Sheet.jsx';
@@ -37,6 +37,9 @@ export default function Settings() {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleting, setDeleting] = useState(false);
 
+  // Blocked users state
+  const [blockedUsers, setBlockedUsers] = useState(null);
+
   useEffect(() => {
     if (user) {
       setForm({
@@ -49,7 +52,20 @@ export default function Settings() {
     api('/me/sessions')
       .then((d) => setSessionCount(d.count || 1))
       .catch(() => {});
+    api('/me/blocks')
+      .then((d) => setBlockedUsers(d.blocks || []))
+      .catch(() => {});
   }, [user]);
+
+  const unblockUser = async (username) => {
+    try {
+      await api(`/users/${username}/block`, { method: 'DELETE' });
+      setBlockedUsers((prev) => (prev || []).filter((u) => u.username !== username));
+      toast.show(`@${username} unblocked`);
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
 
   const saveProfile = async (e) => {
     e.preventDefault();
@@ -257,6 +273,37 @@ export default function Settings() {
             </button>
           )}
         </div>
+      </section>
+
+      {/* Privacy & Blocked Accounts */}
+      <section className="card settings__section" aria-labelledby="s-safety">
+        <h2 id="s-safety" className="section-title">Privacy & Safety</h2>
+        <span className="strong block">Blocked accounts</span>
+        <p className="muted small">Blocked accounts cannot see your posts, find your profile, or message you.</p>
+        {blockedUsers && blockedUsers.length === 0 ? (
+          <p className="muted small" style={{ marginTop: 8 }}>You haven't blocked anyone.</p>
+        ) : (
+          <div className="stack-sm" style={{ marginTop: 8 }}>
+            {blockedUsers?.map((u) => (
+              <div key={u.id} className="person-row">
+                <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                  <Avatar user={u} size={36} />
+                  <div>
+                    <span className="strong block small">{u.displayName}</span>
+                    <span className="muted small">@{u.username}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => unblockUser(u.username)}
+                >
+                  Unblock
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Wellbeing */}
