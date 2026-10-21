@@ -1,7 +1,8 @@
-// Create: choose a photo or video, add a caption and audience, then upload with live progress.
-import { useEffect, useState } from 'react';
+// Create: choose a photo, video, or multi-photo carousel (2-10 photos),
+// add a caption, optional poll, and audience, then upload with live progress.
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, X, BarChart2, Plus } from 'lucide-react';
+import { UploadCloud, X, BarChart2, Plus, ChevronLeft, ChevronRight, Images } from 'lucide-react';
 import { uploadPost } from '../lib/api';
 import { useToast, useAuth } from '../lib/context.jsx';
 
@@ -16,8 +17,12 @@ export default function Create() {
   const navigate = useNavigate();
   const toast = useToast();
   const { user } = useAuth();
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState('');
+  const addInputRef = useRef(null);
+
+  const [files, setFiles] = useState([]);
+  const [previews, setPreviews] = useState([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+
   const [caption, setCaption] = useState('');
   const [visibility, setVisibility] = useState('public');
   const [progress, setProgress] = useState(0);
@@ -45,31 +50,75 @@ export default function Create() {
   };
 
   useEffect(() => {
-    if (!file) { setPreview(''); return undefined; }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (!files.length) {
+      setPreviews([]);
+      setActiveIdx(0);
+      return undefined;
+    }
+    const urls = files.map((f) => URL.createObjectURL(f));
+    setPreviews(urls);
+    if (activeIdx >= urls.length) setActiveIdx(Math.max(0, urls.length - 1));
+    return () => {
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [files]);
 
-  const pick = (f) => {
+  const handleFileSelection = (selectedList) => {
     setError('');
-    if (!f) return;
-    const isVideo = f.type.startsWith('video/');
-    const isImage = f.type.startsWith('image/');
-    if (!isVideo && !isImage) return setError('That file type isn’t supported. Use a photo or a short video.');
-    if (isImage && f.size > 20 * 1024 * 1024) return setError('Photos must be 20 MB or smaller.');
-    if (isVideo && f.size > 100 * 1024 * 1024) return setError('Videos must be 100 MB or smaller.');
-    setFile(f);
+    if (!selectedList || !selectedList.length) return;
+    const incoming = Array.from(selectedList);
+
+    const hasVideo = incoming.some((f) => f.type.startsWith('video/'));
+    if (hasVideo) {
+      if (incoming.length > 1 || files.length > 0) {
+        return setError('Videos cannot be combined with other photos or videos.');
+      }
+      const v = incoming[0];
+      if (v.size > 100 * 1024 * 1024) return setError('Videos must be 100 MB or smaller.');
+      setFiles([v]);
+      return;
+    }
+
+    // All incoming are photos
+    for (const f of incoming) {
+      if (!f.type.startsWith('image/')) {
+        return setError('Unsupported file type. Use JPG, PNG, WebP, GIF, or a video.');
+      }
+      if (f.size > 20 * 1024 * 1024) {
+        return setError('Photos must be 20 MB or smaller.');
+      }
+    }
+
+    // If current files already contain a video, replace with new photos
+    const currentPhotos = files[0]?.type.startsWith('video/') ? [] : files;
+    const combined = [...currentPhotos, ...incoming];
+    if (combined.length > 10) {
+      setError('You can select up to 10 photos per post.');
+      setFiles(combined.slice(0, 10));
+    } else {
+      setFiles(combined);
+    }
+  };
+
+  const removeFile = (idx) => {
+    const next = files.filter((_, i) => i !== idx);
+    setFiles(next);
+    if (activeIdx >= next.length) setActiveIdx(Math.max(0, next.length - 1));
+  };
+
+  const clearAllFiles = () => {
+    setFiles([]);
+    setError('');
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!file || busy) return;
+    if (!files.length || busy) return;
     setBusy(true);
     setError('');
     setProgress(0);
     const form = new FormData();
-    form.append('media', file);
+    files.forEach((f) => form.append('media', f));
     form.append('caption', caption);
     form.append('visibility', visibility);
     if (hasPoll && pollQuestion.trim()) {
@@ -88,34 +137,125 @@ export default function Create() {
     }
   };
 
+  const isVideo = files.length === 1 && files[0].type.startsWith('video/');
+  const isCarousel = files.length > 1;
+
   return (
     <div className="create fade-up">
       <h1 className="page-title">Create</h1>
 
       <form onSubmit={submit} className="create__grid">
         <div className="card create__media">
-          {preview ? (
-            <div className="create__preview">
-              {file.type.startsWith('video/') ? (
-                <video src={preview} controls playsInline muted />
-              ) : (
-                <img src={preview} alt="Selected upload preview" />
+          {previews.length > 0 ? (
+            <div className="create__preview-container">
+              <div className="create__preview">
+                {isVideo ? (
+                  <video src={previews[0]} controls playsInline muted />
+                ) : (
+                  <img src={previews[activeIdx]} alt={`Upload preview ${activeIdx + 1}`} />
+                )}
+
+                <button
+                  type="button"
+                  className="icon-btn create__clear"
+                  onClick={clearAllFiles}
+                  aria-label="Remove all files"
+                  title="Remove all"
+                >
+                  <X size={18} />
+                </button>
+
+                {isCarousel && (
+                  <>
+                    <span className="media__counter" aria-label={`Photo ${activeIdx + 1} of ${files.length}`}>
+                      {activeIdx + 1}/{files.length}
+                    </span>
+
+                    {activeIdx > 0 && (
+                      <button
+                        type="button"
+                        className="media__nav-btn media__nav-btn--prev"
+                        onClick={() => setActiveIdx((i) => i - 1)}
+                        aria-label="Previous photo"
+                      >
+                        <ChevronLeft size={20} />
+                      </button>
+                    )}
+
+                    {activeIdx < files.length - 1 && (
+                      <button
+                        type="button"
+                        className="media__nav-btn media__nav-btn--next"
+                        onClick={() => setActiveIdx((i) => i + 1)}
+                        aria-label="Next photo"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {!isVideo && (
+                <div className="create__strip" aria-label="Photo carousel manager">
+                  {files.map((_, i) => (
+                    <div
+                      key={i}
+                      className={`create__thumb${i === activeIdx ? ' is-active' : ''}`}
+                      onClick={() => setActiveIdx(i)}
+                    >
+                      <img src={previews[i]} alt={`Thumbnail ${i + 1}`} />
+                      <button
+                        type="button"
+                        className="create__thumb-del"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeFile(i);
+                        }}
+                        aria-label={`Remove photo ${i + 1}`}
+                        title="Remove photo"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {files.length < 10 && (
+                    <label className="create__thumb create__thumb-add" title="Add another photo">
+                      <input
+                        ref={addInputRef}
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={(e) => handleFileSelection(e.target.files)}
+                        className="sr-only"
+                      />
+                      <Plus size={18} />
+                      <span>Add</span>
+                    </label>
+                  )}
+                </div>
               )}
-              <button type="button" className="icon-btn create__clear" onClick={() => setFile(null)} aria-label="Remove selected file">
-                <X size={18} />
-              </button>
             </div>
           ) : (
             <label
               className={`dropzone${dragging ? ' is-drag' : ''}`}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setDragging(false); pick(e.dataTransfer.files[0]); }}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); handleFileSelection(e.dataTransfer.files); }}
             >
-              <input type="file" accept="image/*,video/*" onChange={(e) => pick(e.target.files[0])} className="sr-only" />
+              <input
+                type="file"
+                multiple
+                accept="image/*,video/*"
+                onChange={(e) => handleFileSelection(e.target.files)}
+                className="sr-only"
+              />
               <span className="dropzone__icon"><UploadCloud size={30} /></span>
-              <strong>Drop a photo or video here</strong>
-              <span className="muted small">or click to choose a file · photos up to 20 MB · videos up to 3 minutes</span>
+              <strong>Drop photos or a video here</strong>
+              <span className="muted small">
+                Choose 1–10 photos for a carousel or 1 video · photos up to 20 MB · videos up to 3 minutes
+              </span>
             </label>
           )}
           {error && <p className="form-error" role="alert">{error}</p>}
@@ -124,10 +264,22 @@ export default function Create() {
         <div className="card create__details">
           <div className="create__author">
             <span className="strong">@{user?.username}</span>
+            {isCarousel && (
+              <span className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Images size={13} /> {files.length} Photos (Carousel)
+              </span>
+            )}
           </div>
           <label className="field">
             <span>Caption</span>
-            <textarea className="input textarea" rows={5} value={caption} maxLength={MAX_CAPTION} onChange={(e) => setCaption(e.target.value)} placeholder="Write a caption. Add #tags to help people find it." />
+            <textarea
+              className="input textarea"
+              rows={5}
+              value={caption}
+              maxLength={MAX_CAPTION}
+              onChange={(e) => setCaption(e.target.value)}
+              placeholder="Write a caption. Add #tags to help people find it."
+            />
             <small className="muted small" aria-live="polite">{caption.length}/{MAX_CAPTION}</small>
           </label>
 
@@ -195,7 +347,13 @@ export default function Create() {
             <div className="radio-cards">
               {VISIBILITY.map((v) => (
                 <label key={v.id} className={`radio-card${visibility === v.id ? ' is-on' : ''}`}>
-                  <input type="radio" name="visibility" value={v.id} checked={visibility === v.id} onChange={() => setVisibility(v.id)} />
+                  <input
+                    type="radio"
+                    name="visibility"
+                    value={v.id}
+                    checked={visibility === v.id}
+                    onChange={() => setVisibility(v.id)}
+                  />
                   <span className="strong">{v.label}</span>
                   <span className="muted small">{v.hint}</span>
                 </label>
@@ -209,8 +367,8 @@ export default function Create() {
             </div>
           )}
 
-          <button className="btn btn--primary btn--block" disabled={!file || busy}>
-            {busy ? `Uploading… ${Math.round(progress * 100)}%` : 'Share'}
+          <button className="btn btn--primary btn--block" disabled={!files.length || busy}>
+            {busy ? `Uploading… ${Math.round(progress * 100)}%` : isCarousel ? `Share ${files.length} Photos` : 'Share'}
           </button>
         </div>
       </form>

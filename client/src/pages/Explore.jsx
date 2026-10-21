@@ -1,7 +1,7 @@
 // Explore: trending grid when empty; search people, posts and #hashtags when typing.
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Heart, Play, Image as ImageIcon } from 'lucide-react';
+import { Search, Heart, Play, Image as ImageIcon, Layers } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback.jsx';
 import { api } from '../lib/api';
@@ -139,6 +139,7 @@ export default function Explore() {
                     <span className="tile__placeholder"><ImageIcon size={22} /></span>
                   )}
                   {p.mediaType === 'video' && <span className="tile__badge" aria-hidden="true"><Play size={14} fill="currentColor" /></span>}
+                  {p.mediaType === 'carousel' && <span className="tile__badge" aria-label="Carousel post" title="Carousel post"><Layers size={14} /></span>}
                   <span className="tile__overlay" aria-hidden="true"><Heart size={16} fill="currentColor" /> {formatCount(p.likeCount)}</span>
                 </Link>
               ))}

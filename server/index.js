@@ -675,17 +675,54 @@ api.delete('/stories/:id', wrap(async (req, res) => {
 }));
 
 // ----- Posts -----
-api.post('/posts', upload.single('media'), wrap(async (req, res) => {
-  const file = req.file;
-  const cleanup = () => file && fs.rm(file.path, { force: true }, () => {});
-  if (!file) return bad(res, 'Choose a photo or video to share.');
-  const isImage = IMAGE_TYPES.includes(file.mimetype);
-  const isVideo = VIDEO_TYPES.includes(file.mimetype);
-  if (!isImage && !isVideo) { cleanup(); return bad(res, 'Unsupported file. Use JPG, PNG, WebP, GIF, MP4, MOV or WebM.'); }
-  if (isImage && file.size > 20 * 1024 * 1024) { cleanup(); return bad(res, 'Photos must be 20 MB or smaller.'); }
+api.post('/posts', (req, res, next) => {
+  upload.array('media', 10)(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_UNEXPECTED_FILE' || err.code === 'LIMIT_FILE_COUNT') {
+        return bad(res, 'You can upload up to 10 photos per post.');
+      }
+      return bad(res, err.message || 'File upload error.');
+    }
+    next();
+  });
+}, wrap(async (req, res) => {
+  const files = req.files || (req.file ? [req.file] : []);
+  const cleanupAll = () => {
+    for (const f of files) {
+      if (f && f.path) fs.rm(f.path, { force: true }, () => {});
+    }
+  };
+  if (!files.length) return bad(res, 'Choose a photo or video to share.');
+
+  if (files.length > 1) {
+    for (const f of files) {
+      const isImg = IMAGE_TYPES.includes(f.mimetype);
+      if (!isImg) {
+        cleanupAll();
+        return bad(res, 'Carousel posts can only contain photos (JPG, PNG, WebP, GIF).');
+      }
+      if (f.size > 20 * 1024 * 1024) {
+        cleanupAll();
+        return bad(res, 'Each photo must be 20 MB or smaller.');
+      }
+    }
+  } else {
+    const file = files[0];
+    const isImage = IMAGE_TYPES.includes(file.mimetype);
+    const isVideo = VIDEO_TYPES.includes(file.mimetype);
+    if (!isImage && !isVideo) {
+      cleanupAll();
+      return bad(res, 'Unsupported file. Use JPG, PNG, WebP, GIF, MP4, MOV or WebM.');
+    }
+    if (isImage && file.size > 20 * 1024 * 1024) {
+      cleanupAll();
+      return bad(res, 'Photos must be 20 MB or smaller.');
+    }
+  }
+
   const visibility = ['public', 'followers', 'private'].includes(req.body?.visibility) ? req.body.visibility : 'public';
   const caption = String(req.body?.caption || '').slice(0, 2200);
-  const mediaType = isVideo ? 'video' : 'image';
+  const mediaType = files.length > 1 ? 'carousel' : (VIDEO_TYPES.includes(files[0].mimetype) ? 'video' : 'image');
 
   let pollData = null;
   if (req.body?.poll) {
@@ -728,7 +765,11 @@ api.post('/posts', upload.single('media'), wrap(async (req, res) => {
     return row.id;
   });
 
-  media.enqueueProcessing(postId, file.path, mediaType);
+  if (mediaType === 'carousel') {
+    media.enqueueCarouselProcessing(postId, files.map((f) => f.path));
+  } else {
+    media.enqueueProcessing(postId, files[0].path, mediaType);
+  }
   res.status(202).json({ post: serializePost(await getVisiblePost(me(req), postId)) });
 }));
 

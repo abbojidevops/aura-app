@@ -127,6 +127,65 @@ function enqueueProcessing(postId, srcPath, mediaType) {
   });
 }
 
+async function processCarousel(postId, srcPaths) {
+  const dir = path.join(UPLOADS, 'posts', String(postId));
+  fs.mkdirSync(dir, { recursive: true });
+  const items = [];
+  for (let i = 0; i < srcPaths.length; i++) {
+    const src = srcPaths[i];
+    const feedFilename = `feed_${i}.webp`;
+    const thumbFilename = `thumb_${i}.webp`;
+    const feedPath = path.join(dir, feedFilename);
+    const thumbPath = path.join(dir, thumbFilename);
+    const meta = await sharp(src).rotate().resize({ width: 1080, withoutEnlargement: true }).webp({ quality: 82 }).toFile(feedPath);
+    await sharp(src).rotate().resize({ width: 480, height: 480, fit: 'cover' }).webp({ quality: 75 }).toFile(thumbPath);
+    items.push({
+      mediaType: 'image',
+      mediaUrl: `/uploads/posts/${postId}/${feedFilename}`,
+      thumbUrl: `/uploads/posts/${postId}/${thumbFilename}`,
+      width: meta.width,
+      height: meta.height,
+      sortOrder: i,
+    });
+  }
+  return items;
+}
+
+function enqueueCarouselProcessing(postId, srcPaths) {
+  enqueue(async () => {
+    try {
+      const items = await processCarousel(postId, srcPaths);
+      await storage.publishPost(postId);
+      const first = items[0];
+      await db.tx(async (t) => {
+        for (const item of items) {
+          await t.run(
+            'INSERT INTO post_media (post_id, media_type, media_url, thumb_url, width, height, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [postId, item.mediaType, item.mediaUrl, item.thumbUrl, item.width, item.height, item.sortOrder]
+          );
+        }
+        await t.run(
+          "UPDATE posts SET status='published', media_url=@mediaUrl, thumb_url=@thumbUrl, width=@width, height=@height, duration=null WHERE id=@id",
+          {
+            mediaUrl: first.mediaUrl,
+            thumbUrl: first.thumbUrl,
+            width: first.width,
+            height: first.height,
+            id: postId,
+          }
+        );
+      });
+    } catch (err) {
+      await db.run("UPDATE posts SET status='failed' WHERE id=?", [postId]).catch(() => {});
+      console.error(`[media] carousel post ${postId} failed: ${err.message}`);
+    } finally {
+      for (const p of srcPaths) {
+        fs.rm(p, { force: true }, () => {});
+      }
+    }
+  });
+}
+
 // On startup, anything still "processing" was interrupted by a restart, so mark it failed.
 async function recoverStale() {
   await db.run("UPDATE posts SET status = 'failed' WHERE status = 'processing'");
@@ -185,6 +244,7 @@ async function cleanupExpiredStories() {
 
 module.exports = {
   enqueueProcessing,
+  enqueueCarouselProcessing,
   processStoryMedia,
   deleteStoryMedia,
   cleanupExpiredStories,

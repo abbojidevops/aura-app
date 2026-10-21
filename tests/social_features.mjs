@@ -466,6 +466,57 @@ const openWs = (token) => new Promise((resolve) => {
   });
   check('unsupported audio format rejected (400)', badAudioRes.status === 400);
 
+  // 17. Test Multi-Image Carousel Posts
+  // 17.1 Mixed non-image rejected
+  const badCarouselForm = new FormData();
+  badCarouselForm.append('media', new Blob([pngBuffer], { type: 'image/png' }), 'photo1.png');
+  badCarouselForm.append('media', new Blob(['not-an-image'], { type: 'text/plain' }), 'note.txt');
+  const badCarouselRes = await j('/api/posts', { token: demoToken, method: 'POST', form: badCarouselForm });
+  check('carousel with non-image rejected (400)', badCarouselRes.status === 400);
+
+  // 17.2 Valid 3-image carousel post
+  const carouselForm = new FormData();
+  carouselForm.append('media', new Blob([pngBuffer], { type: 'image/png' }), 'slide1.png');
+  carouselForm.append('media', new Blob([pngBuffer], { type: 'image/png' }), 'slide2.png');
+  carouselForm.append('media', new Blob([pngBuffer], { type: 'image/png' }), 'slide3.png');
+  carouselForm.append('caption', 'Weekend photo dump #dump #photography');
+  carouselForm.append('visibility', 'public');
+
+  const createCarouselRes = await j('/api/posts', { token: demoToken, method: 'POST', form: carouselForm });
+  check('create carousel post (202)', createCarouselRes.status === 202 && createCarouselRes.data.post?.mediaType === 'carousel');
+  const carouselPostId = createCarouselRes.data.post.id;
+
+  // Poll until published
+  let cPost = createCarouselRes.data.post;
+  for (let i = 0; i < 40 && cPost?.status === 'processing'; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    const pollRes = await j(`/api/posts/${carouselPostId}`, { token: demoToken });
+    cPost = pollRes.data?.post;
+  }
+  check('carousel post processed to published', cPost?.status === 'published');
+  check('carousel post mediaType is carousel', cPost?.mediaType === 'carousel');
+  check('carousel post has mediaList with 3 images', Array.isArray(cPost?.mediaList) && cPost.mediaList.length === 3);
+  check('carousel post mediaList items have mediaUrl and thumbUrl', cPost?.mediaList?.every((m) => m.mediaUrl && m.thumbUrl && m.mediaType === 'image'));
+  check('carousel post mediaList items have sequential sortOrder', cPost?.mediaList?.[0]?.sortOrder === 0 && cPost?.mediaList?.[1]?.sortOrder === 1 && cPost?.mediaList?.[2]?.sortOrder === 2);
+  check('carousel post backward-compatible mediaUrl matches first slide', cPost?.mediaUrl === cPost?.mediaList?.[0]?.mediaUrl);
+
+  // 17.3 Carousel in feed
+  const feedRes = await j('/api/feed?mode=following&limit=50', { token: u2Token });
+  const feedCarousel = feedRes.data?.items?.find((p) => p.id === carouselPostId);
+  check('feed includes carousel post with mediaList', feedCarousel?.mediaType === 'carousel' && feedCarousel?.mediaList?.length === 3);
+
+  // 17.4 Carousel on author profile
+  const profileRes = await j('/api/users/demo', { token: u2Token });
+  const profileCarousel = profileRes.data?.posts?.find((p) => p.id === carouselPostId);
+  check('author profile includes carousel post with mediaList', profileCarousel?.mediaType === 'carousel' && profileCarousel?.mediaList?.length === 3);
+
+  // 17.5 Delete carousel post cascades and cleans up
+  const deleteCarouselRes = await j(`/api/posts/${carouselPostId}`, { token: demoToken, method: 'DELETE' });
+  check('delete carousel post returns 200 ok', deleteCarouselRes.status === 200 && deleteCarouselRes.data.ok === true);
+
+  const getDeletedCarousel = await j(`/api/posts/${carouselPostId}`, { token: demoToken });
+  check('deleted carousel is 404', getDeletedCarousel.status === 404);
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

@@ -1,7 +1,7 @@
 // Profile: identity, counts, follow or message, and a grid of posts, reels or saved items.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Grid3x3, Clapperboard, Bookmark, Lock, Play, Image as ImageIcon, Settings as SettingsIcon, MessageCircle, Pin, MoreHorizontal, UserX } from 'lucide-react';
+import { Grid3x3, Clapperboard, Bookmark, Lock, Play, Image as ImageIcon, Settings as SettingsIcon, MessageCircle, Pin, MoreHorizontal, UserX, Layers } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import Sheet from '../components/Sheet.jsx';
 import { ErrorState, Spinner, EmptyState } from '../components/Feedback.jsx';
@@ -202,6 +202,7 @@ export default function Profile() {
                     <span className="tile__placeholder"><ImageIcon size={22} /></span>
                   )}
                   {p.mediaType === 'video' && <span className="tile__badge" aria-hidden="true"><Play size={14} fill="currentColor" /></span>}
+                  {p.mediaType === 'carousel' && <span className="tile__badge" aria-label="Carousel post" title="Carousel post"><Layers size={14} /></span>}
                   {p.isPinned && <span className="tile__badge tile__badge--pin" aria-label="Pinned post" title="Pinned post"><Pin size={13} fill="currentColor" /></span>}
                 </Link>
               ))}

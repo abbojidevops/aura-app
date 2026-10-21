@@ -82,9 +82,38 @@ async function attachPolls(rows, me) {
   return rows;
 }
 
+async function attachCarouselMedia(rows) {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => r.id);
+  const mediaRows = await db.all(
+    `SELECT post_id, media_type, media_url, thumb_url, width, height, sort_order
+     FROM post_media
+     WHERE post_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY post_id, sort_order ASC`,
+    ids
+  );
+  const byPost = new Map();
+  for (const m of mediaRows) {
+    if (!byPost.has(m.post_id)) byPost.set(m.post_id, []);
+    byPost.get(m.post_id).push({
+      mediaType: m.media_type,
+      mediaUrl: mediaUrl(m.media_url),
+      thumbUrl: mediaUrl(m.thumb_url),
+      width: m.width,
+      height: m.height,
+      sortOrder: m.sort_order,
+    });
+  }
+  for (const r of rows) {
+    r.mediaList = byPost.get(r.id) || [];
+  }
+  return rows;
+}
+
 async function attachPostDetails(rows, me) {
   await attachTags(rows);
   await attachPolls(rows, me);
+  await attachCarouselMedia(rows);
   return rows;
 }
 
@@ -107,6 +136,14 @@ function serializePost(r) {
     saved: !!r.saved,
     tags: r.tags || [],
     poll: r.poll || null,
+    mediaList: (r.mediaList || []).map((m) => ({
+      mediaType: m.mediaType,
+      mediaUrl: mediaUrl(m.mediaUrl),
+      thumbUrl: mediaUrl(m.thumbUrl),
+      width: m.width,
+      height: m.height,
+      sortOrder: m.sortOrder,
+    })),
     createdAt: r.created_at,
     author: {
       id: r.user_id,
@@ -244,7 +281,7 @@ async function rank(rows, me, settings) {
     }
 
     if (!reasons.length) reasons.push('Trending across AURA');
-    return { row, score, reasons: reasons.slice(0, 2) };
+    return { row, score, reasons: reasons.slice(0, 3) };
   }).sort((a, b) => b.score - a.score);
 
   // Diversity: no creator more than twice in a row.
@@ -283,4 +320,4 @@ function extractTags(caption) {
   return [...found].slice(0, 15);
 }
 
-module.exports = { POST_SELECT, VISIBLE, FOLLOWED, attachTags, attachPolls, attachPostDetails, serializePost, getVisiblePost, feedFor, extractTags, rank, MOODS, getFeedSettings, saveFeedSettings };
+module.exports = { POST_SELECT, VISIBLE, FOLLOWED, attachTags, attachPolls, attachCarouselMedia, attachPostDetails, serializePost, getVisiblePost, feedFor, extractTags, rank, MOODS, getFeedSettings, saveFeedSettings };
