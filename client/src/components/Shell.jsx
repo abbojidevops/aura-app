@@ -52,6 +52,7 @@ export default function Shell() {
           const actionText =
             t === 'like' ? 'liked your post' :
             t === 'comment' ? 'commented on your post' :
+            t === 'reply' ? 'replied to your comment' :
             t === 'follow' ? 'started following you' :
             t === 'follow_request' ? 'requested to follow you' :
             t === 'mention' ? 'mentioned you' : 'sent an update';

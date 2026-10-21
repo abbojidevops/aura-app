@@ -12,7 +12,8 @@ export default function PostPage() {
   const [post, setPost] = useState(null);
   const [error, setError] = useState('');
   const [commentsKey, setCommentsKey] = useState(0);
-  const [replyUser, setReplyUser] = useState(null);
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [autoExpandId, setAutoExpandId] = useState(null);
 
   const load = () => {
     setError('');
@@ -43,15 +44,17 @@ export default function PostPage() {
           key={commentsKey}
           postId={post.id}
           postAuthorId={post.author.id}
+          autoExpandParentId={autoExpandId}
           onCountChange={(count) => setPost((p) => ({ ...p, commentCount: count }))}
-          onReply={(uname) => setReplyUser(uname)}
+          onReply={(target) => setReplyTarget(target)}
         />
         <CommentComposer
           postId={post.id}
-          replyUser={replyUser}
-          onReplyHandled={() => setReplyUser(null)}
-          onPosted={() => {
+          replyTarget={replyTarget}
+          onCancelReply={() => setReplyTarget(null)}
+          onPosted={(parentId) => {
             setPost((p) => ({ ...p, commentCount: p.commentCount + 1 }));
+            if (parentId) setAutoExpandId(parentId);
             setCommentsKey((k) => k + 1);
           }}
         />

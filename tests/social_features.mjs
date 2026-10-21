@@ -361,6 +361,71 @@ const openWs = (token) => new Promise((resolve) => {
   const mentionNotif = demoNotifs.data.items?.find((n) => n.type === 'mention' && n.postId === demoPost.id);
   check('demo notifications list includes mention', !!mentionNotif && mentionNotif.actor.username === u2Name);
 
+  // 15. Test Threaded Comments & Replies
+  const parentCommentRes = await j(`/api/posts/${demoPost.id}/comments`, {
+    token: demoToken,
+    method: 'POST',
+    body: { body: 'Root discussion comment #architecture' },
+  });
+  check('create top-level parent comment (201)', parentCommentRes.status === 201 && !!parentCommentRes.data.commentId);
+  const parentCommentId = parentCommentRes.data.commentId;
+
+  const parentCommentsList = await j(`/api/posts/${demoPost.id}/comments`, { token: u2Token });
+  const fetchedParent = parentCommentsList.data.comments?.find((c) => c.id === parentCommentId);
+  check('fetched parent comment has 0 replies', fetchedParent?.replyCount === 0 && Array.isArray(fetchedParent?.replies) && fetchedParent.replies.length === 0);
+
+  // User 2 replies to demo's comment
+  const notifsBeforeReply = demoWs.events.length;
+  const replyRes = await j(`/api/posts/${demoPost.id}/comments`, {
+    token: u2Token,
+    method: 'POST',
+    body: { body: 'First reply to root comment', parentId: parentCommentId },
+  });
+  check('create reply to parent comment (201)', replyRes.status === 201 && !!replyRes.data.commentId);
+  const replyId = replyRes.data.commentId;
+
+  await new Promise((r) => setTimeout(r, 400));
+  const replyEvent = demoWs.events.slice(notifsBeforeReply).find((e) => e.type === 'notification' && e.notification?.type === 'reply');
+  check('demo receives realtime reply notification over ws', !!replyEvent);
+
+  const demoReplyNotifs = await j('/api/notifications', { token: demoToken });
+  const replyNotifItem = demoReplyNotifs.data.items?.find((n) => n.type === 'reply' && n.postId === demoPost.id);
+  check('demo notifications list includes reply', !!replyNotifItem && replyNotifItem.actor.username === u2Name);
+
+  // Verify parent comment now includes the reply
+  const checkThreadRes = await j(`/api/posts/${demoPost.id}/comments`, { token: demoToken });
+  const updatedParent = checkThreadRes.data.comments?.find((c) => c.id === parentCommentId);
+  check('parent comment has replyCount = 1', updatedParent?.replyCount === 1);
+  check('parent comment replies contains user 2 reply', updatedParent?.replies?.[0]?.id === replyId && updatedParent.replies[0].author.username === u2Name);
+
+  // User 3 adds second reply
+  const reply2Res = await j(`/api/posts/${demoPost.id}/comments`, {
+    token: u3Token,
+    method: 'POST',
+    body: { body: 'Second reply from user 3', parentId: parentCommentId },
+  });
+  check('create second reply (201)', reply2Res.status === 201);
+  const reply2Id = reply2Res.data.commentId;
+
+  const checkThreadRes2 = await j(`/api/posts/${demoPost.id}/comments`, { token: demoToken });
+  const updatedParent2 = checkThreadRes2.data.comments?.find((c) => c.id === parentCommentId);
+  check('parent comment has replyCount = 2', updatedParent2?.replyCount === 2);
+
+  // Delete user 3's reply
+  const deleteReplyRes = await j(`/api/posts/${demoPost.id}/comments/${reply2Id}`, { token: u3Token, method: 'DELETE' });
+  check('user 3 deletes own reply (200)', deleteReplyRes.status === 200);
+
+  const checkThreadAfterDelete = await j(`/api/posts/${demoPost.id}/comments`, { token: demoToken });
+  const parentAfterDelete = checkThreadAfterDelete.data.comments?.find((c) => c.id === parentCommentId);
+  check('parent comment has replyCount = 1 after deletion', parentAfterDelete?.replyCount === 1 && !parentAfterDelete.replies.some((r) => r.id === reply2Id));
+
+  // Delete root parent comment (cascades to remaining reply)
+  const deleteParentRes = await j(`/api/posts/${demoPost.id}/comments/${parentCommentId}`, { token: demoToken, method: 'DELETE' });
+  check('author deletes root comment (200)', deleteParentRes.status === 200);
+
+  const checkThreadAfterParentDelete = await j(`/api/posts/${demoPost.id}/comments`, { token: demoToken });
+  check('root comment and replies are gone', !checkThreadAfterParentDelete.data.comments?.some((c) => c.id === parentCommentId));
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

@@ -19,7 +19,7 @@ c('mood reason shown', ent.d.items.some(i=>i.reasons.some(r=>r.includes('Enterta
 // controversy: a reported post should drop when the slider is high
 await j('/api/me/feed-settings',{t:T,m:'PATCH',b:{mood:'inspire',controversial:100}});
 const before=(await j('/api/feed?mode=home&limit=30',{t:T})).d.items;
-const idx=before.findIndex(i=>i.author.username!=='demo');
+const idx=before.findIndex(i=>i.author.username!=='demo' && !i.reasons.some(r=>r.includes('Reported')));
 const target=before[idx];
 const rp=await j('/api/auth/login',{m:'POST',b:{identifier:'pixel.pete',password:'demo1234'}});
 await j(`/api/posts/${target.id}/report`,{t:rp.d.token,m:'POST',b:{reason:'Spam'}});
@@ -29,3 +29,4 @@ c('reported post sinks with controversial slider at 100', newIdx>idx, `position 
 c('reported reason shown', after[newIdx]?.reasons.some(r=>r.includes('Reported')));
 await j('/api/me/feed-settings',{t:T,m:'PATCH',b:{mood:'inspire',controversial:10}});
 console.log(fails===0?'\nMOOD CHECKS PASSED':`\n${fails} FAILED`);
+process.exitCode = fails ? 1 : 0;

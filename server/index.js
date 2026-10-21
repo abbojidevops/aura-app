@@ -867,7 +867,7 @@ api.get('/posts/:id/comments', wrap(async (req, res) => {
   const myId = me(req);
   if (!(await getVisiblePost(myId, id))) return notFound(res, 'This post is unavailable.');
   const rows = await db.all(`
-    SELECT c.id, c.body, c.like_count, c.created_at, u.id AS uid, u.username, u.display_name, u.avatar_hue,
+    SELECT c.id, c.parent_id, c.body, c.like_count, c.created_at, u.id AS uid, u.username, u.display_name, u.avatar_hue,
       EXISTS (SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = @me) AS liked
     FROM comments c
     JOIN users u ON u.id = c.user_id
@@ -877,17 +877,37 @@ api.get('/posts/:id/comments', wrap(async (req, res) => {
         WHERE (b.blocker_id = @me AND b.blocked_id = c.user_id)
            OR (b.blocker_id = c.user_id AND b.blocked_id = @me)
       )
-    ORDER BY c.id ASC LIMIT 200`, { id, me: myId });
-  res.json({
-    comments: rows.map((c) => ({
+    ORDER BY c.id ASC LIMIT 300`, { id, me: myId });
+
+  const topLevel = [];
+  const repliesByParent = new Map();
+
+  for (const c of rows) {
+    const formatted = {
       id: c.id,
+      parentId: c.parent_id ? Number(c.parent_id) : null,
       body: c.body,
       likeCount: c.like_count || 0,
       liked: !!c.liked,
       createdAt: c.created_at,
       author: { id: c.uid, username: c.username, displayName: c.display_name, avatarHue: c.avatar_hue },
-    })),
-  });
+    };
+    if (c.parent_id) {
+      const pid = Number(c.parent_id);
+      if (!repliesByParent.has(pid)) repliesByParent.set(pid, []);
+      repliesByParent.get(pid).push(formatted);
+    } else {
+      topLevel.push(formatted);
+    }
+  }
+
+  for (const c of topLevel) {
+    const reps = repliesByParent.get(c.id) || [];
+    c.replyCount = reps.length;
+    c.replies = reps;
+  }
+
+  res.json({ comments: topLevel });
 }));
 
 api.post('/posts/:id/comments', wrap(async (req, res) => {
@@ -902,29 +922,62 @@ api.post('/posts/:id/comments', wrap(async (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return bad(res, 'Write something before posting.');
   if (body.length > 500) return bad(res, 'Comments can be up to 500 characters.');
+
+  const parentIdRaw = req.body?.parentId ? Number(req.body.parentId) : null;
+  let targetParentId = null;
+  let parentAuthorId = null;
+
+  if (parentIdRaw) {
+    const parentRow = await db.get('SELECT id, user_id, parent_id FROM comments WHERE id = ? AND post_id = ?', [parentIdRaw, id]);
+    if (!parentRow) return bad(res, 'Parent comment not found.');
+    // Keep thread nesting 1-level deep
+    targetParentId = parentRow.parent_id || parentRow.id;
+    parentAuthorId = parentRow.user_id;
+  }
+
+  let newCommentId;
   await db.tx(async (t) => {
-    await t.run('INSERT INTO comments (post_id, user_id, body) VALUES (?, ?, ?)', [id, me(req), body]);
+    const row = await t.get(
+      'INSERT INTO comments (post_id, user_id, body, parent_id) VALUES (?, ?, ?, ?) RETURNING id',
+      [id, me(req), body, targetParentId]
+    );
+    newCommentId = row.id;
     await t.run('UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?', [id]);
+
     const commentMentions = new Set(extractMentions(body));
-    let postOwnerMentioned = false;
+    const notifiedUserIds = new Set();
+
     for (const username of commentMentions) {
       const target = await findUserByUsername(username);
-      if (target && target.id !== me(req)) {
-        const isBlocked = !!(await t.get(
+      if (target && target.id !== me(req) && !notifiedUserIds.has(target.id)) {
+        notifiedUserIds.add(target.id);
+        const blocked = !!(await t.get(
           'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
           [me(req), target.id, target.id, me(req)]
         ));
-        if (!isBlocked) {
+        if (!blocked) {
           await notify(target.id, me(req), 'mention', id, t);
-          if (target.id === post.user_id) postOwnerMentioned = true;
         }
       }
     }
-    if (!postOwnerMentioned) {
+
+    if (parentAuthorId && parentAuthorId !== me(req) && !notifiedUserIds.has(parentAuthorId)) {
+      notifiedUserIds.add(parentAuthorId);
+      const blocked = !!(await t.get(
+        'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+        [me(req), parentAuthorId, parentAuthorId, me(req)]
+      ));
+      if (!blocked) {
+        await notify(parentAuthorId, me(req), 'reply', id, t);
+      }
+    }
+
+    if (!notifiedUserIds.has(post.user_id)) {
       await notify(post.user_id, me(req), 'comment', id, t);
     }
   });
-  res.status(201).json({ ok: true });
+
+  res.status(201).json({ ok: true, commentId: newCommentId });
 }));
 
 api.post('/posts/:id/poll/vote', wrap(async (req, res) => {
@@ -980,8 +1033,10 @@ api.delete('/posts/:id/comments/:commentId', wrap(async (req, res) => {
   }
 
   await db.tx(async (t) => {
+    const countRow = await t.get('SELECT COUNT(*) AS c FROM comments WHERE id = ? OR parent_id = ?', [commentId, commentId]);
+    const deletedCount = countRow ? Number(countRow.c) : 1;
     await t.run('DELETE FROM comments WHERE id = ?', [commentId]);
-    await t.run('UPDATE posts SET comment_count = GREATEST(comment_count - 1, 0) WHERE id = ?', [postId]);
+    await t.run('UPDATE posts SET comment_count = GREATEST(comment_count - ?, 0) WHERE id = ?', [deletedCount, postId]);
   });
 
   res.json({ ok: true });

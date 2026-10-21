@@ -46,4 +46,4 @@ check('11th login attempt gets 429', lastStatus === 429, `status ${lastStatus}`)
 check('429 body matches error message', lastBody.error === 'Too many attempts. Try again later.', JSON.stringify(lastBody));
 
 console.log(fails === 0 ? '\nSECURITY CHECKS PASSED' : `\n${fails} CHECK(S) FAILED`);
-process.exit(fails ? 1 : 0);
+process.exitCode = fails ? 1 : 0;

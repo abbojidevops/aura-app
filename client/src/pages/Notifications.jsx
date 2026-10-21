@@ -14,6 +14,7 @@ const COPY = {
   follow: { icon: UserPlus, text: 'started following you' },
   follow_request: { icon: UserPlus, text: 'requested to follow you' },
   mention: { icon: AtSign, text: 'mentioned you' },
+  reply: { icon: MessageCircle, text: 'replied to your comment' },
 };
 
 export default function Notifications() {
