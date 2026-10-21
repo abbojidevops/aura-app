@@ -426,6 +426,46 @@ const openWs = (token) => new Promise((resolve) => {
   const checkThreadAfterParentDelete = await j(`/api/posts/${demoPost.id}/comments`, { token: demoToken });
   check('root comment and replies are gone', !checkThreadAfterParentDelete.data.comments?.some((c) => c.id === parentCommentId));
 
+  // 16. Test Audio Voice Notes in Messages
+  const tinyAudioBuffer = Buffer.from([
+    0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81, 0x01, 0x42, 0xf2, 0x81,
+    0x04, 0x42, 0xf3, 0x81, 0x08, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d, 0x42, 0x87, 0x81, 0x02,
+    0x42, 0x85, 0x81, 0x02,
+  ]);
+  const audioForm = new FormData();
+  audioForm.append('audio', new Blob([tinyAudioBuffer], { type: 'audio/webm' }), 'test-audio.webm');
+  audioForm.append('duration', '4');
+
+  const u2EventsBefore = u2Ws.events.length;
+  const audioMsgRes = await j(`/api/messages/${convoId}/audio`, {
+    token: demoToken,
+    method: 'POST',
+    form: audioForm,
+  });
+  check('send voice note (201)', audioMsgRes.status === 201 && audioMsgRes.data.mediaType === 'audio' && !!audioMsgRes.data.mediaUrl);
+  const audioMsgId = audioMsgRes.data.id;
+
+  // Realtime notification over WS
+  await new Promise((r) => setTimeout(r, 400));
+  const audioWsEvent = u2Ws.events.slice(u2EventsBefore).find((e) => e.type === 'message' && Number(e.conversationId) === Number(convoId));
+  check('u2 receives realtime message event for voice note', !!audioWsEvent);
+
+  // u2 fetches messages
+  const u2ThreadRes = await j(`/api/messages/${convoId}`, { token: u2Token });
+  const fetchedAudioMsg = u2ThreadRes.data.messages?.find((m) => m.id === audioMsgId);
+  check('fetched voice note has mediaType audio and mediaUrl', fetchedAudioMsg?.mediaType === 'audio' && !!fetchedAudioMsg?.mediaUrl && fetchedAudioMsg.duration === 4);
+  check('voice note is not mine for u2', fetchedAudioMsg?.mine === false);
+
+  // Unsupported file type rejected
+  const badAudioForm = new FormData();
+  badAudioForm.append('audio', new Blob(['not-audio'], { type: 'text/plain' }), 'test.txt');
+  const badAudioRes = await j(`/api/messages/${convoId}/audio`, {
+    token: demoToken,
+    method: 'POST',
+    form: badAudioForm,
+  });
+  check('unsupported audio format rejected (400)', badAudioRes.status === 400);
+
   demoWs.ws.close();
   u2Ws.ws.close();
 

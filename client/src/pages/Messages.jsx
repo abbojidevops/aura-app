@@ -1,7 +1,7 @@
 // Direct messages: conversation list + thread. New messages arrive over WebSocket (/ws), with polling as a fallback.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Send, MessageCircle } from 'lucide-react';
+import { Send, MessageCircle, Mic, Play, Pause, Trash2 } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { EmptyState, Spinner } from '../components/Feedback.jsx';
 import { api } from '../lib/api';
@@ -58,32 +58,40 @@ export default function Messages() {
         </form>
         {convos === null && <div className="center-pad"><Spinner /></div>}
         {convos?.length === 0 && <EmptyState icon={MessageCircle} title="No conversations yet">Start one with a username above.</EmptyState>}
-        <ul className="convo-list">
-          {convos?.map((c) => (
-            <li key={c.id}>
-              <Link to={`/messages/${c.id}`} className={`convo${String(c.id) === String(id) ? ' is-active' : ''}`}>
-                <Avatar user={c.user} size={44} />
-                <span className="convo__text">
-                  <span className="strong">{c.user.displayName}</span>
-                  <span className="muted small truncate">{c.lastBody || 'Say hello 👋'}</span>
-                </span>
-                <span className="convo__meta">
-                  {c.lastAt && <span className="muted small">{timeAgo(c.lastAt)}</span>}
-                  {c.unread > 0 && <span className="badge badge--inline">{c.unread}</span>}
-                </span>
-              </Link>
-            </li>
-          ))}
+        <ul className="convos">
+          {convos?.map((c) => {
+            const on = String(c.id) === String(id);
+            return (
+              <li key={c.id}>
+                <Link to={`/messages/${c.id}`} className={`convo${on ? ' is-on' : ''}`}>
+                  <Avatar user={c.other} size={44} ring={c.unread > 0} />
+                  <div className="convo__body">
+                    <div className="convo__row">
+                      <span className="strong truncate">{c.other.displayName}</span>
+                      {c.lastMessage && <span className="muted small">{timeAgo(c.lastMessage.createdAt)}</span>}
+                    </div>
+                    <div className="convo__row">
+                      <span className="muted small truncate">
+                        {c.lastMessage ? (c.lastMessage.mediaType === 'audio' ? '🎤 Voice note' : c.lastMessage.body) : `@${c.other.username}`}
+                      </span>
+                      {c.unread > 0 && <span className="badge">{c.unread}</span>}
+                    </div>
+                  </div>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       </aside>
 
-      <section className="messages__thread" aria-label="Conversation">
+      <section className="messages__main" aria-label="Current conversation">
         {id && active ? (
-          <Thread key={id} id={id} other={active.user} />
-        ) : id ? (
-          <div className="center-pad"><Spinner /></div>
+          <Thread id={id} other={active.other} />
         ) : (
-          <EmptyState icon={MessageCircle} title="Select a conversation">Your direct messages appear here.</EmptyState>
+          <div className="messages__placeholder">
+            <MessageCircle size={48} className="muted" />
+            <p className="muted">Pick a conversation or start a new one.</p>
+          </div>
         )}
       </section>
     </div>
@@ -92,6 +100,85 @@ export default function Messages() {
 
 const QUICK_EMOJIS = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
 
+function AudioPlayer({ src, duration: totalDuration, mine }) {
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(totalDuration || 0);
+  const audioRef = useRef(null);
+
+  const toggle = (e) => {
+    e.stopPropagation();
+    if (!audioRef.current) return;
+    if (playing) {
+      audioRef.current.pause();
+      setPlaying(false);
+    } else {
+      audioRef.current.play().catch(() => {});
+      setPlaying(true);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
+      if (!audioDuration && audioRef.current.duration) {
+        setAudioDuration(audioRef.current.duration);
+      }
+    }
+  };
+
+  const handleSeek = (e) => {
+    e.stopPropagation();
+    if (!audioRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const target = pos * (audioDuration || 1);
+    audioRef.current.currentTime = target;
+    setCurrentTime(target);
+  };
+
+  const formatTime = (sec) => {
+    const s = Math.floor(sec || 0);
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}:${rem < 10 ? '0' : ''}${rem}`;
+  };
+
+  const progress = audioDuration > 0 ? (currentTime / audioDuration) * 100 : 0;
+
+  return (
+    <div className={`audio-bubble${mine ? ' audio-bubble--mine' : ''}`}>
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={() => setAudioDuration(audioRef.current.duration || totalDuration || 0)}
+        onEnded={() => { setPlaying(false); setCurrentTime(0); }}
+        onPause={() => setPlaying(false)}
+        onPlay={() => setPlaying(true)}
+      />
+      <button
+        type="button"
+        className="audio-bubble__play-btn"
+        onClick={toggle}
+        aria-label={playing ? 'Pause voice note' : 'Play voice note'}
+      >
+        {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+      </button>
+      <div className="audio-bubble__track-wrap" onClick={handleSeek}>
+        <div className="audio-bubble__track">
+          <div className="audio-bubble__progress" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="audio-bubble__meta">
+          <span>{formatTime(currentTime)}</span>
+          <span>{formatTime(audioDuration || totalDuration)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Thread({ id, other }) {
   const toast = useToast();
   const navigate = useNavigate();
@@ -99,8 +186,14 @@ function Thread({ id, other }) {
   const [text, setText] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [hoveredId, setHoveredId] = useState(null);
+  const [recording, setRecording] = useState(false);
+  const [recordSec, setRecordSec] = useState(0);
+
   const lastId = useRef(0);
   const list = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
 
   const [otherTyping, setOtherTyping] = useState(false);
   const typingTimer = useRef(null);
@@ -187,6 +280,81 @@ function Thread({ id, other }) {
     }
   };
 
+  const startRecording = async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        toast.show('Microphone not supported in this browser.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mr.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mr.start(200);
+      setRecording(true);
+      setRecordSec(0);
+      recordTimerRef.current = setInterval(() => {
+        setRecordSec((s) => s + 1);
+      }, 1000);
+    } catch {
+      toast.show('Microphone permission denied or unavailable.');
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    clearInterval(recordTimerRef.current);
+    audioChunksRef.current = [];
+    setRecording(false);
+    setRecordSec(0);
+  };
+
+  const sendVoiceNote = () => {
+    if (!mediaRecorderRef.current) return;
+    const finalDuration = recordSec || 1;
+    clearInterval(recordTimerRef.current);
+
+    mediaRecorderRef.current.onstop = async () => {
+      const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
+      const blob = new Blob(audioChunksRef.current, { type: mime });
+      setRecording(false);
+      setRecordSec(0);
+      if (blob.size === 0) return;
+
+      const fd = new FormData();
+      fd.append('audio', blob, 'voicenote.webm');
+      fd.append('duration', String(finalDuration));
+
+      try {
+        await api(`/messages/${id}/audio`, { method: 'POST', form: fd });
+        await fetchNew();
+      } catch (err) {
+        toast.show(err.message);
+      }
+    };
+
+    mediaRecorderRef.current.stop();
+  };
+
+  const formatRecordTime = (sec) => {
+    const m = Math.floor(sec / 60);
+    const rem = sec % 60;
+    return `${m}:${rem < 10 ? '0' : ''}${rem}`;
+  };
+
   return (
     <div className="thread">
       <header className="thread__head">
@@ -213,10 +381,14 @@ function Thread({ id, other }) {
             <div className="bubble-container">
               <div className="bubble-actions-wrap">
                 <div
-                  className={`bubble${m.mine ? ' bubble--mine' : ''}${m.pending ? ' is-pending' : ''} fade-up`}
+                  className={`bubble${m.mine ? ' bubble--mine' : ''}${m.mediaType === 'audio' ? ' bubble--audio' : ''}${m.pending ? ' is-pending' : ''} fade-up`}
                   onClick={() => setHoveredId((h) => (h === m.id ? null : m.id))}
                 >
-                  <div>{m.body}</div>
+                  {m.mediaType === 'audio' ? (
+                    <AudioPlayer src={m.mediaUrl} duration={m.duration} mine={m.mine} />
+                  ) : (
+                    <div>{m.body}</div>
+                  )}
                   {m.createdAt && (
                     <span className="bubble-time">
                       {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -269,24 +441,66 @@ function Thread({ id, other }) {
         )}
       </div>
 
-      <form className="thread__composer" onSubmit={send}>
-        <label className="sr-only" htmlFor="message-input">Message</label>
-        <input
-          id="message-input"
-          className="input"
-          value={text}
-          maxLength={1000}
-          onChange={handleInputChange}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder="Message…"
-        />
-        <button className="btn btn--primary btn--icon" disabled={!text.trim()} aria-label="Send message"><Send size={18} /></button>
-      </form>
+      {recording ? (
+        <div className="thread__composer thread__composer--recording">
+          <div className="recording-indicator">
+            <span className="recording-dot" />
+            <span className="small strong">{formatRecordTime(recordSec)}</span>
+            <span className="muted small">Recording voice note…</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn--icon btn--sm"
+            onClick={cancelRecording}
+            title="Cancel recording"
+            aria-label="Cancel recording"
+          >
+            <Trash2 size={18} />
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary btn--icon btn--sm"
+            onClick={sendVoiceNote}
+            title="Send voice note"
+            aria-label="Send voice note"
+          >
+            <Send size={18} />
+          </button>
+        </div>
+      ) : (
+        <form className="thread__composer" onSubmit={send}>
+          <label className="sr-only" htmlFor="message-input">Message</label>
+          <input
+            id="message-input"
+            className="input"
+            value={text}
+            maxLength={1000}
+            onChange={handleInputChange}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder="Message…"
+          />
+          {text.trim() ? (
+            <button className="btn btn--primary btn--icon" type="submit" aria-label="Send message">
+              <Send size={18} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--icon"
+              onClick={startRecording}
+              aria-label="Record voice note"
+              title="Record voice note"
+            >
+              <Mic size={18} />
+            </button>
+          )}
+        </form>
+      )}
     </div>
   );
 }

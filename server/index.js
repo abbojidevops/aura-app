@@ -18,6 +18,7 @@ const { POST_SELECT, VISIBLE, attachTags, attachPolls, attachPostDetails, serial
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'];
+const AUDIO_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-m4a', 'video/webm'];
 const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 const TMP = path.join(media.UPLOADS, 'tmp');
 fs.mkdirSync(TMP, { recursive: true });
@@ -1340,7 +1341,7 @@ api.get('/messages/:id', wrap(async (req, res) => {
   const id = await assertMember(req, res);
   if (!id) return;
   const after = Number(req.query.after || 0);
-  const msgs = await db.all('SELECT id, sender_id, body, created_at FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id ASC LIMIT 200', [id, after]);
+  const msgs = await db.all('SELECT id, sender_id, body, media_type, media_url, duration, created_at FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id ASC LIMIT 200', [id, after]);
   if (msgs.length) {
     const last = msgs[msgs.length - 1].id;
     await db.run('UPDATE conversation_members SET last_read_id = GREATEST(last_read_id, ?) WHERE conversation_id = ? AND user_id = ?', [last, id, me(req)]);
@@ -1371,11 +1372,75 @@ api.get('/messages/:id', wrap(async (req, res) => {
         id: m.id,
         mine: m.sender_id === me(req),
         body: m.body,
+        mediaType: m.media_type || null,
+        mediaUrl: m.media_url ? mediaUrl(m.media_url) : null,
+        duration: m.duration ? Number(m.duration) : null,
         createdAt: m.created_at,
         reactions: [...groupMap.values()],
       };
     }),
   });
+}));
+
+api.post('/messages/:id/audio', upload.single('audio'), wrap(async (req, res) => {
+  const convId = await assertMember(req, res);
+  if (!convId) return;
+  const file = req.file;
+  const cleanup = () => file && fs.rm(file.path, { force: true }, () => {});
+  if (!file) return bad(res, 'Audio file is required.');
+
+  const isAudio = AUDIO_TYPES.includes(file.mimetype) || file.mimetype.startsWith('audio/');
+  if (!isAudio) {
+    cleanup();
+    return bad(res, 'Unsupported audio format. Use WebM, OGG, MP4, MP3, or WAV.');
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    cleanup();
+    return bad(res, 'Audio file must be under 15 MB.');
+  }
+
+  const isBlocked = !!(await db.get(`
+    SELECT 1 FROM blocks b
+    JOIN conversation_members cm1 ON cm1.conversation_id = ? AND b.blocker_id = cm1.user_id
+    JOIN conversation_members cm2 ON cm2.conversation_id = ? AND b.blocked_id = cm2.user_id
+  `, [convId, convId]));
+  if (isBlocked) {
+    cleanup();
+    return res.status(403).json({ error: 'You cannot send messages in this conversation.' });
+  }
+
+  const durationSec = Math.max(1, Math.min(300, Math.round(Number(req.body?.duration) || 0)));
+
+  try {
+    const row = await db.get(
+      'INSERT INTO messages (conversation_id, sender_id, body, media_type, media_url, duration) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      [convId, me(req), 'Voice note', 'audio', '', durationSec]
+    );
+
+    const dir = path.join(media.UPLOADS, 'messages', String(convId));
+    fs.mkdirSync(dir, { recursive: true });
+    const ext = file.mimetype.includes('ogg') ? '.ogg' : file.mimetype.includes('mp4') ? '.m4a' : file.mimetype.includes('wav') ? '.wav' : '.webm';
+    const filename = `${row.id}${ext}`;
+    const targetPath = path.join(dir, filename);
+    fs.copyFileSync(file.path, targetPath);
+    cleanup();
+
+    const storedMediaUrl = `/uploads/messages/${convId}/${filename}`;
+    await db.run('UPDATE messages SET media_url = ? WHERE id = ?', [storedMediaUrl, row.id]);
+
+    const members = await db.all('SELECT user_id FROM conversation_members WHERE conversation_id = ?', [convId]);
+    realtime.publish(members.map((m) => m.user_id), { type: 'message', conversationId: convId });
+
+    res.status(201).json({
+      id: row.id,
+      mediaType: 'audio',
+      mediaUrl: mediaUrl(storedMediaUrl),
+      duration: durationSec,
+    });
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }));
 
 api.post('/messages/:id', wrap(async (req, res) => {
