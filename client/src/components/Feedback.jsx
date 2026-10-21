@@ -1,5 +1,35 @@
 // Loading, empty and error states: each explains what happened and what to do next.
+import React from 'react';
 import { Inbox, AlertTriangle } from 'lucide-react';
+
+export class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error('ErrorBoundary caught:', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="center-pad">
+          <ErrorState
+            message={this.state.error?.message || 'An unexpected rendering error occurred.'}
+            onRetry={() => {
+              this.setState({ hasError: false, error: null });
+              this.props.onReset?.();
+            }}
+          />
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export function PostSkeleton() {
   return (

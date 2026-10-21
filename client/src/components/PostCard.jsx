@@ -17,6 +17,7 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const [liking, setLiking] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);

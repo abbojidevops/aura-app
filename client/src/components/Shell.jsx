@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Home, Compass, PlusSquare, Clapperboard, MessageCircle, Bell, User, Settings, Search, Shield, Bookmark } from 'lucide-react';
 import Avatar from './Avatar.jsx';
+import { ErrorBoundary } from './Feedback.jsx';
 import { useAuth, useToast } from '../lib/context.jsx';
 import { api } from '../lib/api';
 import { subscribeRealtime } from '../lib/realtime';
@@ -129,7 +130,9 @@ export default function Shell() {
       </header>
 
       <main className="main" id="main">
-        <Outlet />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
 
       <nav className="bottomnav" aria-label="Primary">
