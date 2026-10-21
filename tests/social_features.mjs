@@ -8,11 +8,17 @@ const check = (name, cond, extra = '') => {
   if (!cond) fails++;
 };
 
-async function j(pathUrl, { token, method = 'GET', body, headers: customHeaders } = {}) {
+const tinyPngBase64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const pngBuffer = Buffer.from(tinyPngBase64, 'base64');
+
+async function j(pathUrl, { token, method = 'GET', body, form, headers: customHeaders } = {}) {
   const headers = { 'X-Forwarded-For': '192.0.2.77', ...(customHeaders || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   let payload;
-  if (body !== undefined) {
+  if (form) {
+    payload = form;
+  } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
@@ -294,6 +300,66 @@ const openWs = (token) => new Promise((resolve) => {
 
   const unblockRes = await j(`/api/users/${u3Name}/block`, { token: demoToken, method: 'DELETE' });
   check('unblock user 3 (200)', unblockRes.status === 200 && unblockRes.data.blocked === false);
+
+  // 13. Test Interactive Polls
+  const pollForm = new FormData();
+  pollForm.append('media', new Blob([pngBuffer], { type: 'image/png' }), 'poll.png');
+  pollForm.append('caption', 'Check out this poll #poll');
+  pollForm.append('visibility', 'public');
+  pollForm.append('poll', JSON.stringify({ question: 'Best framework?', options: ['React', 'Vue', 'Svelte'] }));
+
+  const createPollPostRes = await j('/api/posts', { token: demoToken, method: 'POST', form: pollForm });
+  check('create post with poll (202)', createPollPostRes.status === 202 && !!createPollPostRes.data.post);
+  const pollPostId = createPollPostRes.data.post.id;
+
+  let pollPost = createPollPostRes.data.post;
+  for (let i = 0; i < 20 && pollPost?.status === 'processing'; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const pRes = await j(`/api/posts/${pollPostId}`, { token: demoToken });
+    pollPost = pRes.data?.post;
+  }
+  check('poll post is published', pollPost?.status === 'published');
+
+  const pollPostU2 = (await j(`/api/posts/${pollPostId}`, { token: u2Token })).data?.post;
+  check('post contains poll data', !!pollPostU2?.poll && pollPostU2.poll.question === 'Best framework?' && pollPostU2.poll.options?.length === 3);
+  check('poll totalVotes is 0 initially', pollPostU2.poll.totalVotes === 0 && pollPostU2.poll.myVote === null);
+
+  const opt1 = pollPostU2.poll.options[0];
+  const opt2 = pollPostU2.poll.options[1];
+
+  // User 2 votes for Option 1
+  const voteRes1 = await j(`/api/posts/${pollPostId}/poll/vote`, { token: u2Token, method: 'POST', body: { optionId: opt1.id } });
+  check('user 2 votes for option 1 (200)', voteRes1.status === 200 && voteRes1.data.poll?.totalVotes === 1 && voteRes1.data.poll?.myVote === opt1.id);
+  const u2Opt1 = voteRes1.data.poll?.options.find((o) => o.id === opt1.id);
+  check('option 1 has 100% percent', u2Opt1?.percent === 100);
+
+  // User 3 votes for Option 2
+  const voteRes2 = await j(`/api/posts/${pollPostId}/poll/vote`, { token: u3Token, method: 'POST', body: { optionId: opt2.id } });
+  check('user 3 votes for option 2 (200)', voteRes2.status === 200 && voteRes2.data.poll?.totalVotes === 2);
+  const u3Opt1 = voteRes2.data.poll?.options.find((o) => o.id === opt1.id);
+  const u3Opt2 = voteRes2.data.poll?.options.find((o) => o.id === opt2.id);
+  check('options have split percentages 50/50', u3Opt1?.percent === 50 && u3Opt2?.percent === 50);
+
+  // User 2 toggles vote off
+  const unvoteRes = await j(`/api/posts/${pollPostId}/poll/vote`, { token: u2Token, method: 'POST', body: { optionId: opt1.id } });
+  check('user 2 toggles vote off (200)', unvoteRes.status === 200 && unvoteRes.data.poll?.totalVotes === 1 && unvoteRes.data.poll?.myVote === null);
+
+  // 14. Test User Mentions in Comments
+  const notifsBefore = demoWs.events.length;
+  const mentionCommentRes = await j(`/api/posts/${demoPost.id}/comments`, {
+    token: u2Token,
+    method: 'POST',
+    body: { body: 'Hello @demo check this mention out!' },
+  });
+  check('create comment with mention (201)', mentionCommentRes.status === 201);
+
+  await new Promise((r) => setTimeout(r, 400));
+  const mentionEvent = demoWs.events.slice(notifsBefore).find((e) => e.type === 'notification' && e.notification?.type === 'mention');
+  check('demo receives realtime mention notification over ws', !!mentionEvent);
+
+  const demoNotifs = await j('/api/notifications', { token: demoToken });
+  const mentionNotif = demoNotifs.data.items?.find((n) => n.type === 'mention' && n.postId === demoPost.id);
+  check('demo notifications list includes mention', !!mentionNotif && mentionNotif.actor.username === u2Name);
 
   demoWs.ws.close();
   u2Ws.ws.close();

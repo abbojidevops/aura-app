@@ -1,7 +1,7 @@
 // Create: choose a photo or video, add a caption and audience, then upload with live progress.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, X } from 'lucide-react';
+import { UploadCloud, X, BarChart2, Plus } from 'lucide-react';
 import { uploadPost } from '../lib/api';
 import { useToast, useAuth } from '../lib/context.jsx';
 
@@ -24,6 +24,25 @@ export default function Create() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
+
+  // Poll state
+  const [hasPoll, setHasPoll] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
+
+  const addOption = () => {
+    if (pollOptions.length < 4) setPollOptions([...pollOptions, '']);
+  };
+  const removeOption = (idx) => {
+    if (pollOptions.length > 2) {
+      setPollOptions(pollOptions.filter((_, i) => i !== idx));
+    }
+  };
+  const updateOption = (idx, val) => {
+    const next = [...pollOptions];
+    next[idx] = val;
+    setPollOptions(next);
+  };
 
   useEffect(() => {
     if (!file) { setPreview(''); return undefined; }
@@ -53,6 +72,12 @@ export default function Create() {
     form.append('media', file);
     form.append('caption', caption);
     form.append('visibility', visibility);
+    if (hasPoll && pollQuestion.trim()) {
+      const validOptions = pollOptions.map((o) => o.trim()).filter(Boolean);
+      if (validOptions.length >= 2) {
+        form.append('poll', JSON.stringify({ question: pollQuestion.trim(), options: validOptions }));
+      }
+    }
     try {
       const res = await uploadPost(form, setProgress);
       toast.show('Uploaded. We’re processing your post.');
@@ -105,6 +130,65 @@ export default function Create() {
             <textarea className="input textarea" rows={5} value={caption} maxLength={MAX_CAPTION} onChange={(e) => setCaption(e.target.value)} placeholder="Write a caption. Add #tags to help people find it." />
             <small className="muted small" aria-live="polite">{caption.length}/{MAX_CAPTION}</small>
           </label>
+
+          <div className="field">
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="strong" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <BarChart2 size={16} /> Poll
+              </span>
+              <button
+                type="button"
+                className={`btn btn--sm${hasPoll ? ' btn--primary' : ''}`}
+                onClick={() => setHasPoll((v) => !v)}
+              >
+                {hasPoll ? 'Remove Poll' : '+ Add Poll'}
+              </button>
+            </div>
+            {hasPoll && (
+              <div className="stack-sm poll-builder fade-up" style={{ marginTop: 10 }}>
+                <input
+                  className="input"
+                  value={pollQuestion}
+                  maxLength={200}
+                  onChange={(e) => setPollQuestion(e.target.value)}
+                  placeholder="Ask a question…"
+                />
+                <div className="stack-sm" style={{ gap: 6 }}>
+                  {pollOptions.map((opt, i) => (
+                    <div key={i} className="row" style={{ gap: 6 }}>
+                      <input
+                        className="input input--sm"
+                        value={opt}
+                        maxLength={100}
+                        onChange={(e) => updateOption(i, e.target.value)}
+                        placeholder={`Option ${i + 1}`}
+                      />
+                      {pollOptions.length > 2 && (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => removeOption(i)}
+                          aria-label="Remove option"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {pollOptions.length < 4 && (
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={addOption}
+                    style={{ alignSelf: 'flex-start' }}
+                  >
+                    <Plus size={14} /> Add option
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           <fieldset className="field">
             <legend>Who can see this</legend>

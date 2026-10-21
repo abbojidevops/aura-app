@@ -33,6 +33,61 @@ async function attachTags(rows) {
   return rows;
 }
 
+async function attachPolls(rows, me) {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => r.id);
+  const pollRows = await db.all(`
+    SELECT p.id AS poll_id, p.post_id, p.question,
+      o.id AS option_id, o.text AS option_text, o.sort_order,
+      COUNT(v.user_id)::integer AS vote_count,
+      EXISTS (SELECT 1 FROM poll_votes pv WHERE pv.option_id = o.id AND pv.user_id = ?) AS my_vote
+    FROM polls p
+    JOIN poll_options o ON o.poll_id = p.id
+    LEFT JOIN poll_votes v ON v.option_id = o.id
+    WHERE p.post_id IN (${ids.map(() => '?').join(',')})
+    GROUP BY p.id, p.post_id, p.question, o.id, o.text, o.sort_order
+    ORDER BY p.id, o.sort_order ASC`, [me, ...ids]);
+
+  const pollsByPost = new Map();
+  for (const pr of pollRows) {
+    if (!pollsByPost.has(pr.post_id)) {
+      pollsByPost.set(pr.post_id, {
+        id: pr.poll_id,
+        question: pr.question,
+        totalVotes: 0,
+        myVote: null,
+        options: [],
+      });
+    }
+    const poll = pollsByPost.get(pr.post_id);
+    const votes = pr.vote_count || 0;
+    poll.totalVotes += votes;
+    if (pr.my_vote) poll.myVote = pr.option_id;
+    poll.options.push({
+      id: pr.option_id,
+      text: pr.option_text,
+      votes,
+    });
+  }
+
+  for (const poll of pollsByPost.values()) {
+    for (const opt of poll.options) {
+      opt.percent = poll.totalVotes > 0 ? Math.round((opt.votes / poll.totalVotes) * 100) : 0;
+    }
+  }
+
+  for (const r of rows) {
+    r.poll = pollsByPost.get(r.id) || null;
+  }
+  return rows;
+}
+
+async function attachPostDetails(rows, me) {
+  await attachTags(rows);
+  await attachPolls(rows, me);
+  return rows;
+}
+
 function serializePost(r) {
   return {
     id: r.id,
@@ -51,6 +106,7 @@ function serializePost(r) {
     liked: !!r.liked,
     saved: !!r.saved,
     tags: r.tags || [],
+    poll: r.poll || null,
     createdAt: r.created_at,
     author: {
       id: r.user_id,
@@ -69,7 +125,7 @@ async function getVisiblePost(me, id) {
     { me, id }
   );
   if (!row) return null;
-  return (await attachTags([row]))[0];
+  return (await attachPostDetails([row], me))[0];
 }
 
 async function interestMap(me) {
@@ -211,7 +267,7 @@ async function feedFor(me, mode = 'home', { limit = 12, offset = 0 } = {}) {
   const rows = await db.all(`${POST_SELECT}
     WHERE p.status = 'published' AND p.created_at >= now() - interval '30 days' AND ${VISIBLE} ${extra}
     ORDER BY p.created_at DESC LIMIT 400`, { me });
-  await attachTags(rows);
+  await attachPostDetails(rows, me);
   const settings = await getFeedSettings(me);
   const ranked = await rank(rows, me, settings);
   const page = ranked.slice(offset, offset + limit);
@@ -227,4 +283,4 @@ function extractTags(caption) {
   return [...found].slice(0, 15);
 }
 
-module.exports = { POST_SELECT, VISIBLE, FOLLOWED, attachTags, serializePost, getVisiblePost, feedFor, extractTags, rank, MOODS, getFeedSettings, saveFeedSettings };
+module.exports = { POST_SELECT, VISIBLE, FOLLOWED, attachTags, attachPolls, attachPostDetails, serializePost, getVisiblePost, feedFor, extractTags, rank, MOODS, getFeedSettings, saveFeedSettings };

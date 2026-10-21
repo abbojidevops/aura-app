@@ -52,7 +52,8 @@ export default function Shell() {
             t === 'like' ? 'liked your post' :
             t === 'comment' ? 'commented on your post' :
             t === 'follow' ? 'started following you' :
-            t === 'follow_request' ? 'requested to follow you' : 'sent an update';
+            t === 'follow_request' ? 'requested to follow you' :
+            t === 'mention' ? 'mentioned you' : 'sent an update';
           toast.show(`${act?.displayName || 'Someone'} ${actionText}`);
         }
       }

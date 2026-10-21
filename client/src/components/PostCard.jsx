@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin, FolderPlus } from 'lucide-react';
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin, FolderPlus, Check } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
@@ -9,6 +9,7 @@ import { useAuth, useToast } from '../lib/context.jsx';
 import { api } from '../lib/api';
 import { toggleLike, toggleSave, sharePost } from '../lib/actions';
 import { timeAgo, plural } from '../lib/format';
+import { subscribeRealtime } from '../lib/realtime';
 
 const REPORT_REASONS = ['Spam', 'Harassment or bullying', 'Misleading information', 'Unsafe or violent', 'Something else'];
 
@@ -30,6 +31,23 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
   const [colLoading, setColLoading] = useState(false);
   const [newColName, setNewColName] = useState('');
   const isMine = user && post.author.id === user.id;
+
+  useEffect(() => {
+    return subscribeRealtime((msg) => {
+      if (msg.type === 'poll_vote' && msg.postId === post.id) {
+        patch?.({ poll: msg.poll });
+      }
+    });
+  }, [post.id]);
+
+  const votePoll = async (optionId) => {
+    try {
+      const res = await api(`/posts/${post.id}/poll/vote`, { method: 'POST', body: { optionId } });
+      patch?.({ poll: res.poll });
+    } catch (err) {
+      toast.show(err.message);
+    }
+  };
 
   const openLikers = async () => {
     if (post.likeCount <= 0) return;
@@ -222,6 +240,43 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
             <Link to={`/u/${post.author.username}`} className="strong">@{post.author.username}</Link>{' '}
             <CaptionText text={post.caption} />
           </p>
+        )}
+        {post.poll && (
+          <div className="post-poll">
+            <div className="post-poll__question strong">{post.poll.question}</div>
+            <div className="post-poll__options">
+              {post.poll.options.map((opt) => {
+                const isVoted = post.poll.myVote === opt.id;
+                const hasVotedAny = post.poll.myVote != null;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`post-poll__opt${isVoted ? ' is-voted' : ''}`}
+                    onClick={() => votePoll(opt.id)}
+                  >
+                    {hasVotedAny && (
+                      <div
+                        className="post-poll__fill"
+                        style={{ width: `${opt.percent}%` }}
+                      />
+                    )}
+                    <span className="post-poll__text">
+                      {opt.text}
+                      {isVoted && <Check size={14} className="post-poll__check" />}
+                    </span>
+                    {hasVotedAny && (
+                      <span className="post-poll__percent">{opt.percent}%</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="post-poll__meta muted small">
+              {post.poll.totalVotes} {post.poll.totalVotes === 1 ? 'vote' : 'votes'}
+              {post.poll.myVote != null && ' · Tap choice to change/remove'}
+            </div>
+          </div>
         )}
         {post.commentCount > 0 && (
           <Link to={`/p/${post.id}`} className="muted small">View all {post.commentCount} comment{post.commentCount === 1 ? '' : 's'}</Link>

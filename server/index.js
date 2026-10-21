@@ -14,7 +14,7 @@ const db = require('./db');
 const { hashPassword, verifyPassword, createSession, requireAuth } = require('./auth');
 const media = require('./media');
 const storage = require('./storage');
-const { POST_SELECT, VISIBLE, attachTags, serializePost, getVisiblePost, feedFor, extractTags, MOODS, getFeedSettings, saveFeedSettings } = require('./feed');
+const { POST_SELECT, VISIBLE, attachTags, attachPolls, attachPostDetails, serializePost, getVisiblePost, feedFor, extractTags, MOODS, getFeedSettings, saveFeedSettings } = require('./feed');
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'];
@@ -37,6 +37,14 @@ async function counts(userId) {
       (SELECT COUNT(*) FROM posts WHERE user_id = @id AND status = 'published') AS posts,
       (SELECT COUNT(*) FROM follows WHERE following_id = @id) AS followers,
       (SELECT COUNT(*) FROM follows WHERE follower_id = @id) AS following`, { id: userId });
+}
+
+function extractMentions(text) {
+  const found = new Set();
+  for (const m of String(text || '').matchAll(/@([a-zA-Z0-9_.]{2,30})/gu)) {
+    found.add(m[1].toLowerCase());
+  }
+  return [...found].slice(0, 10);
 }
 
 async function notify(recipientId, actorId, type, postId, conn = db) {
@@ -380,7 +388,7 @@ api.get('/me/saved', wrap(async (req, res) => {
     JOIN saves s ON s.post_id = p.id AND s.user_id = @me
     WHERE p.status = 'published' AND ${VISIBLE}
     ORDER BY s.created_at DESC LIMIT 60`, { me: viewerId });
-  await attachTags(rows);
+  await attachPostDetails(rows, viewerId);
   res.json({ posts: rows.map(serializePost) });
 }));
 
@@ -426,7 +434,7 @@ api.get('/me/collections/:id', wrap(async (req, res) => {
     JOIN collection_posts cp ON cp.post_id = p.id
     WHERE cp.collection_id = @colId AND (p.status = 'published' OR p.user_id = @me) AND ${VISIBLE}
     ORDER BY cp.created_at DESC`, { me: me(req), colId });
-  await attachTags(rows);
+  await attachPostDetails(rows, me(req));
   res.json({
     collection: { id: col.id, name: col.name, createdAt: col.created_at },
     posts: rows.map(serializePost),
@@ -525,7 +533,7 @@ api.get('/explore', wrap(async (req, res) => {
     WHERE p.status = 'published' AND ${VISIBLE}
       AND (p.caption ILIKE @like OR p.id IN (SELECT post_id FROM post_tags WHERE tag = @tag))
     ORDER BY p.like_count DESC, p.created_at DESC LIMIT 60`, { me: me(req), like, tag });
-  await attachTags(rows);
+  await attachPostDetails(rows, me(req));
   res.json({ users, posts: rows.map(serializePost), tags: [] });
 }));
 
@@ -678,6 +686,13 @@ api.post('/posts', upload.single('media'), wrap(async (req, res) => {
   const caption = String(req.body?.caption || '').slice(0, 2200);
   const mediaType = isVideo ? 'video' : 'image';
 
+  let pollData = null;
+  if (req.body?.poll) {
+    try {
+      pollData = typeof req.body.poll === 'string' ? JSON.parse(req.body.poll) : req.body.poll;
+    } catch {}
+  }
+
   const postId = await db.tx(async (t) => {
     const row = await t.get(
       'INSERT INTO posts (user_id, caption, media_type, visibility, status) VALUES (?, ?, ?, ?, ?) RETURNING id',
@@ -685,6 +700,29 @@ api.post('/posts', upload.single('media'), wrap(async (req, res) => {
     );
     for (const tag of extractTags(caption)) {
       await t.run('INSERT INTO post_tags (post_id, tag) VALUES (?, ?) ON CONFLICT DO NOTHING', [row.id, tag]);
+    }
+    if (pollData && typeof pollData.question === 'string' && Array.isArray(pollData.options) && pollData.options.length >= 2) {
+      const q = pollData.question.trim().slice(0, 200);
+      const validOptions = pollData.options.map((o) => String(o || '').trim().slice(0, 100)).filter(Boolean).slice(0, 4);
+      if (q && validOptions.length >= 2) {
+        const pollRow = await t.get('INSERT INTO polls (post_id, question) VALUES (?, ?) RETURNING id', [row.id, q]);
+        for (let i = 0; i < validOptions.length; i++) {
+          await t.run('INSERT INTO poll_options (poll_id, text, sort_order) VALUES (?, ?, ?)', [pollRow.id, validOptions[i], i]);
+        }
+      }
+    }
+    const captionMentions = new Set(extractMentions(caption));
+    for (const username of captionMentions) {
+      const target = await findUserByUsername(username);
+      if (target && target.id !== me(req)) {
+        const isBlocked = !!(await t.get(
+          'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+          [me(req), target.id, target.id, me(req)]
+        ));
+        if (!isBlocked) {
+          await notify(target.id, me(req), 'mention', row.id, t);
+        }
+      }
     }
     return row.id;
   });
@@ -867,9 +905,66 @@ api.post('/posts/:id/comments', wrap(async (req, res) => {
   await db.tx(async (t) => {
     await t.run('INSERT INTO comments (post_id, user_id, body) VALUES (?, ?, ?)', [id, me(req), body]);
     await t.run('UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?', [id]);
-    await notify(post.user_id, me(req), 'comment', id, t);
+    const commentMentions = new Set(extractMentions(body));
+    let postOwnerMentioned = false;
+    for (const username of commentMentions) {
+      const target = await findUserByUsername(username);
+      if (target && target.id !== me(req)) {
+        const isBlocked = !!(await t.get(
+          'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+          [me(req), target.id, target.id, me(req)]
+        ));
+        if (!isBlocked) {
+          await notify(target.id, me(req), 'mention', id, t);
+          if (target.id === post.user_id) postOwnerMentioned = true;
+        }
+      }
+    }
+    if (!postOwnerMentioned) {
+      await notify(post.user_id, me(req), 'comment', id, t);
+    }
   });
   res.status(201).json({ ok: true });
+}));
+
+api.post('/posts/:id/poll/vote', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const optionId = Number(req.body?.optionId);
+  if (!optionId) return bad(res, 'Option ID is required.');
+
+  const post = await getVisiblePost(me(req), id);
+  if (!post) return notFound(res, 'This post is unavailable.');
+  if (!post.poll) return bad(res, 'This post does not have a poll.');
+
+  const opt = post.poll.options.find((o) => o.id === optionId);
+  if (!opt) return bad(res, 'Invalid poll option.');
+
+  const existingVote = await db.get(
+    'SELECT option_id FROM poll_votes WHERE poll_id = ? AND user_id = ?',
+    [post.poll.id, me(req)]
+  );
+
+  if (existingVote && existingVote.option_id === optionId) {
+    // Toggle off existing vote
+    await db.run('DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?', [post.poll.id, me(req)]);
+  } else {
+    // Upsert vote
+    await db.run(
+      `INSERT INTO poll_votes (poll_id, option_id, user_id) VALUES (?, ?, ?)
+       ON CONFLICT (poll_id, user_id) DO UPDATE SET option_id = excluded.option_id`,
+      [post.poll.id, optionId, me(req)]
+    );
+  }
+
+  // Re-fetch post with updated poll stats
+  const updatedPost = await getVisiblePost(me(req), id);
+  realtime.publish([post.user_id, me(req)], {
+    type: 'poll_vote',
+    postId: id,
+    poll: updatedPost.poll,
+  });
+
+  res.json({ ok: true, poll: updatedPost.poll });
 }));
 
 api.delete('/posts/:id/comments/:commentId', wrap(async (req, res) => {
@@ -958,7 +1053,7 @@ api.get('/users/:username', wrap(async (req, res) => {
     const rows = await db.all(`${POST_SELECT}
       WHERE p.user_id = @uid AND p.status IN ${statuses} AND ${VISIBLE}
       ORDER BY p.is_pinned DESC, p.created_at DESC LIMIT 60`, { me: viewer, uid: user.id });
-    await attachTags(rows);
+    await attachPostDetails(rows, viewer);
     posts = rows.map(serializePost);
   }
   res.json({

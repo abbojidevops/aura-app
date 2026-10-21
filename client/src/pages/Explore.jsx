@@ -13,6 +13,7 @@ export default function Explore() {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('all'); // 'all' | 'people' | 'posts'
 
   const [followedCreators, setFollowedCreators] = useState({});
 
@@ -57,6 +58,14 @@ export default function Explore() {
         <input className="input" type="search" value={q} onChange={(e) => onChange(e.target.value)} placeholder="Search people, posts and #tags" />
       </label>
 
+      {searching && (
+        <div className="segmented" role="tablist" style={{ marginTop: 12, marginBottom: 8 }}>
+          <button role="tab" aria-selected={filter === 'all'} className={filter === 'all' ? 'is-on' : ''} onClick={() => setFilter('all')}>All</button>
+          <button role="tab" aria-selected={filter === 'people'} className={filter === 'people' ? 'is-on' : ''} onClick={() => setFilter('people')}>People</button>
+          <button role="tab" aria-selected={filter === 'posts'} className={filter === 'posts' ? 'is-on' : ''} onClick={() => setFilter('posts')}>Posts</button>
+        </div>
+      )}
+
       {!searching && data?.tags?.length > 0 && (
         <div className="chips" aria-label="Trending tags">
           {data.tags.map((t) => (
@@ -91,7 +100,7 @@ export default function Explore() {
       {error && <ErrorState message={error} />}
       {loading && !data && <div className="center-pad"><Spinner /></div>}
 
-      {searching && data?.users?.length > 0 && (
+      {searching && (filter === 'all' || filter === 'people') && data?.users?.length > 0 && (
         <section className="stack-sm" aria-label="People">
           <h2 className="section-title">People</h2>
           {data.users.map((u) => (
@@ -106,13 +115,19 @@ export default function Explore() {
         </section>
       )}
 
-      {data && (
+      {searching && filter === 'people' && data?.users?.length === 0 && !loading && (
+        <EmptyState icon={Search} title="No people found">
+          No users match "{q}".
+        </EmptyState>
+      )}
+
+      {data && (filter === 'all' || filter === 'posts' || !searching) && (
         <section aria-label={searching ? 'Posts' : 'Trending'}>
           {!searching && <h2 className="section-title">Trending</h2>}
           {searching && data.posts.length > 0 && <h2 className="section-title">Posts</h2>}
           {data.posts.length === 0 ? (
-            !loading && <EmptyState icon={Search} title={searching ? 'No results' : 'Nothing trending yet'}>
-              {searching ? 'Try another name, word or #tag.' : 'Posts will appear here as people share.'}
+            !loading && <EmptyState icon={Search} title={searching ? 'No posts found' : 'Nothing trending yet'}>
+              {searching ? 'Try another word or #tag.' : 'Posts will appear here as people share.'}
             </EmptyState>
           ) : (
             <div className="grid">

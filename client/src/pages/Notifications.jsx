@@ -1,7 +1,7 @@
 // Notifications: likes, comments, new followers, and follow requests.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, MessageCircle, UserPlus, Bell, Check, X } from 'lucide-react';
+import { Heart, MessageCircle, UserPlus, Bell, Check, X, AtSign } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback.jsx';
 import { api } from '../lib/api';
@@ -13,6 +13,7 @@ const COPY = {
   comment: { icon: MessageCircle, text: 'commented on your post' },
   follow: { icon: UserPlus, text: 'started following you' },
   follow_request: { icon: UserPlus, text: 'requested to follow you' },
+  mention: { icon: AtSign, text: 'mentioned you' },
 };
 
 export default function Notifications() {
