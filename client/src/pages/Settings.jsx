@@ -40,6 +40,7 @@ export default function Settings() {
 
   // Blocked users state
   const [blockedUsers, setBlockedUsers] = useState(null);
+  const [pausedUntil, setPausedUntil] = useState(() => Number(localStorage.getItem('aura-pause-until') || 0));
 
   useEffect(() => {
     if (user) {
@@ -134,6 +135,19 @@ export default function Settings() {
     setBreakMinutes(value);
     localStorage.setItem('aura-break-minutes', value);
     toast.show(Number(value) ? `Break reminder set for ${value} minutes` : 'Break reminders off');
+  };
+
+  const pauseFeed = (minutes) => {
+    const until = Date.now() + minutes * 60_000;
+    localStorage.setItem('aura-pause-until', String(until));
+    setPausedUntil(until);
+    toast.show(`Home feed paused for ${minutes} minutes`);
+  };
+
+  const resumeFeed = () => {
+    localStorage.removeItem('aura-pause-until');
+    setPausedUntil(0);
+    toast.show('Home feed resumed');
   };
 
   const handleDeleteAccount = async (e) => {
@@ -324,19 +338,46 @@ export default function Settings() {
         )}
       </section>
 
-      {/* Wellbeing */}
+      {/* Wellbeing & Mindful Social */}
       <section className="card settings__section" aria-labelledby="s-wellbeing">
-        <h2 id="s-wellbeing" className="section-title">Wellbeing</h2>
-        <label className="field">
-          <span>Remind me to take a break after</span>
-          <select className="input" value={breakMinutes} onChange={(e) => updateBreak(e.target.value)}>
-            <option value="0">Never</option>
-            <option value="30">30 minutes</option>
-            <option value="60">1 hour</option>
-            <option value="90">90 minutes</option>
-          </select>
-        </label>
-        <p className="muted small">The reminder appears once per visit. It’s a gentle nudge, not a lock.</p>
+        <h2 id="s-wellbeing" className="section-title">Digital Wellbeing & Mindful Feed</h2>
+        <p className="muted small" style={{ marginBottom: 14 }}>
+          AURA is designed for intentional clarity and mental space rather than addictive dopamine loops.
+        </p>
+        <div className="stack" style={{ gap: 14 }}>
+          <label className="field">
+            <span>Gentle break reminder</span>
+            <select className="input" value={breakMinutes} onChange={(e) => updateBreak(e.target.value)}>
+              <option value="0">Disabled (Never)</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="45">45 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="90">90 minutes</option>
+            </select>
+          </label>
+          <div className="card" style={{ background: 'var(--surface-glass)', border: '1px solid var(--border-light)', padding: 14, borderRadius: 'var(--radius-md)' }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span className="strong block small">Immediate Feed Pause</span>
+                <span className="muted small">
+                  {pausedUntil > Date.now()
+                    ? `Feed paused until ${new Date(pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                    : 'Pause recommendation updates on your feed for mindful focus.'}
+                </span>
+              </div>
+              {pausedUntil > Date.now() ? (
+                <button type="button" className="btn btn--sm" onClick={resumeFeed}>
+                  Resume now
+                </button>
+              ) : (
+                <button type="button" className="btn btn--sm" onClick={() => pauseFeed(30)}>
+                  Pause 30m
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Your Data */}

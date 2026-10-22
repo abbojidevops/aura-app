@@ -3,7 +3,7 @@
 // Carousels support snap-scrolling, navigation arrows, dots, and image counter badge.
 // Double-tap triggers onDoubleTap and shows a heart burst.
 import { useEffect, useRef, useState } from 'react';
-import { Play, Heart, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Play, Heart, AlertTriangle, ChevronLeft, ChevronRight, Volume2, VolumeX } from 'lucide-react';
 
 export default function MediaFrame({ post, active = false, muted = true, onDoubleTap, fit = 'cover', className = '' }) {
   const videoRef = useRef(null);
@@ -12,6 +12,7 @@ export default function MediaFrame({ post, active = false, muted = true, onDoubl
   const tapTimer = useRef(null);
   const [burst, setBurst] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [isMuted, setIsMuted] = useState(muted);
   const [currentSlide, setCurrentSlide] = useState(0);
 
   const isCarousel = post.mediaType === 'carousel' || (Array.isArray(post.mediaList) && post.mediaList.length > 1);
@@ -93,7 +94,7 @@ export default function MediaFrame({ post, active = false, muted = true, onDoubl
           poster={post.thumbUrl || undefined}
           loop
           playsInline
-          muted={muted}
+          muted={isMuted}
           preload={active ? 'auto' : 'metadata'}
           aria-label={post.caption || `Video by @${post.author?.username}`}
         />
@@ -160,6 +161,21 @@ export default function MediaFrame({ post, active = false, muted = true, onDoubl
       )}
       {post.mediaType === 'video' && paused && (
         <span className="media__play" aria-hidden="true"><Play size={30} fill="currentColor" /></span>
+      )}
+      {post.mediaType === 'video' && (
+        <button
+          type="button"
+          className="media__audio-toggle"
+          aria-label={isMuted ? 'Unmute video' : 'Mute video'}
+          title={isMuted ? 'Unmute video' : 'Mute video'}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setIsMuted((prev) => !prev);
+          }}
+        >
+          {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        </button>
       )}
       {burst > 0 && (
         <span key={burst} className="media__burst" aria-hidden="true"><Heart size={96} fill="currentColor" /></span>
