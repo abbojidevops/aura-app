@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin, FolderPlus, Check } from 'lucide-react';
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Flag, Trash2, Edit3, Link as LinkIcon, Info, Pin, FolderPlus, Check, Sparkles } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import MediaFrame from './MediaFrame.jsx';
 import Sheet from './Sheet.jsx';
@@ -8,7 +8,7 @@ import { Spinner } from './Feedback.jsx';
 import { useAuth, useToast } from '../lib/context.jsx';
 import { api } from '../lib/api';
 import { toggleLike, toggleSave, sharePost } from '../lib/actions';
-import { timeAgo, plural } from '../lib/format';
+import { timeAgo, plural, formatCount } from '../lib/format';
 import { subscribeRealtime } from '../lib/realtime';
 
 const REPORT_REASONS = ['Spam', 'Harassment or bullying', 'Misleading information', 'Unsafe or violent', 'Something else'];
@@ -205,37 +205,86 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
 
       <MediaFrame post={post} active={false} onDoubleTap={doubleTapLike} className="post__media" />
 
-      <div className="post__actions">
-        <button className={`icon-btn action${post.liked ? ' is-liked' : ''}${liking ? ' pop' : ''}`} onClick={like} aria-pressed={post.liked} aria-label={post.liked ? 'Unlike' : 'Like'}>
-          <Heart size={24} fill={post.liked ? 'currentColor' : 'none'} />
-        </button>
-        <button className="icon-btn action" onClick={() => navigate(`/p/${post.id}`)} aria-label="Comments">
-          <MessageCircle size={24} />
-        </button>
-        <button className="icon-btn action" onClick={() => sharePost(post, toast)} aria-label="Share">
-          <Send size={22} />
-        </button>
-        <button className={`icon-btn action action--end${post.saved ? ' is-saved' : ''}`} onClick={() => toggleSave(post, patch, toast)} aria-pressed={post.saved} aria-label={post.saved ? 'Remove from saved' : 'Save'}>
-          <Bookmark size={22} fill={post.saved ? 'currentColor' : 'none'} />
-        </button>
+      <div className="post__actions-bar">
+        <div className="post__action-group">
+          <button
+            type="button"
+            className={`action-pill${post.liked ? ' is-liked' : ''}${liking ? ' pop' : ''}`}
+            onClick={like}
+            aria-pressed={post.liked}
+            aria-label={post.liked ? 'Unlike' : 'Like'}
+          >
+            <Heart size={17} fill={post.liked ? 'currentColor' : 'none'} />
+            <span
+              onClick={(e) => {
+                if (post.likeCount > 0) {
+                  e.stopPropagation();
+                  openLikers();
+                }
+              }}
+              title="View likers"
+            >
+              {formatCount(post.likeCount)}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="action-pill"
+            onClick={() => navigate(`/p/${post.id}`)}
+            aria-label={`Comments, ${post.commentCount} total`}
+          >
+            <MessageCircle size={17} />
+            <span>{formatCount(post.commentCount)}</span>
+          </button>
+        </div>
+
+        {reasons && reasons.length > 0 && (
+          <button
+            type="button"
+            className={`action-pill action-pill--aura${showWhy ? ' is-open' : ''}`}
+            onClick={() => setShowWhy((v) => !v)}
+            aria-expanded={showWhy}
+            aria-label="Why am I seeing this?"
+            title={reasons.join(' · ')}
+          >
+            <Sparkles size={13} className="aura-sparkle" />
+            <span className="truncate">{reasons[0].replace(/^Fits your\s*/i, '').replace(/\s*mode$/i, '')}</span>
+          </button>
+        )}
+
+        <div className="post__action-group post__action-group--end">
+          <button
+            type="button"
+            className="action-pill action-pill--icon"
+            onClick={() => sharePost(post, toast)}
+            aria-label="Share"
+          >
+            <Send size={15} />
+          </button>
+          <button
+            type="button"
+            className={`action-pill action-pill--icon${post.saved ? ' is-saved' : ''}`}
+            onClick={() => toggleSave(post, patch, toast)}
+            aria-pressed={post.saved}
+            aria-label={post.saved ? 'Remove from saved' : 'Save'}
+          >
+            <Bookmark size={15} fill={post.saved ? 'currentColor' : 'none'} />
+          </button>
+        </div>
       </div>
 
       <div className="post__body">
-        <div style={{ marginBottom: 4 }}>
-          {post.likeCount > 0 ? (
-            <button
-              type="button"
-              className="btn-link strong"
-              onClick={openLikers}
-              style={{ padding: 0, color: 'inherit', font: 'inherit', cursor: 'pointer' }}
-              aria-label="View who liked this post"
-            >
-              {plural(post.likeCount, 'like')}
-            </button>
-          ) : (
-            <span className="strong">0 likes</span>
-          )}
-        </div>
+        {showWhy && reasons && reasons.length > 0 && (
+          <div className="why-aura-card fade-up">
+            <div className="why-aura-card__title strong">
+              <Sparkles size={13} /> MindFeed Recommendation
+            </div>
+            <ul className="why__list">
+              {reasons.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+          </div>
+        )}
         {post.caption && (
           <p className="caption">
             <Link to={`/u/${post.author.username}`} className="strong">@{post.author.username}</Link>{' '}
@@ -282,16 +331,11 @@ export default function PostCard({ post, patch, reasons, onDeleted }) {
         {post.commentCount > 0 && (
           <Link to={`/p/${post.id}`} className="muted small">View all {post.commentCount} comment{post.commentCount === 1 ? '' : 's'}</Link>
         )}
-        {reasons && reasons.length > 0 && (
+        {reasons && reasons.length > 0 && !showWhy && (
           <div className="why">
-            <button className="btn-link small" onClick={() => setShowWhy((v) => !v)} aria-expanded={showWhy}>
-              <Info size={14} /> Why am I seeing this?
+            <button type="button" className="btn-link small" onClick={() => setShowWhy(true)} aria-expanded={false}>
+              <Sparkles size={13} /> Why this post?
             </button>
-            {showWhy && (
-              <ul className="why__list fade-up">
-                {reasons.map((r) => <li key={r}>{r}</li>)}
-              </ul>
-            )}
           </div>
         )}
       </div>

@@ -1,16 +1,17 @@
 // Settings: appearance, profile, wellbeing, security, privacy, data export, and account deletion.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sun, Moon, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTriangle, UserX } from 'lucide-react';
+import { Sparkles, Sun, Zap, Monitor, Download, LogOut, KeyRound, Shield, Trash2, AlertTriangle, UserX } from 'lucide-react';
 import { api, getToken } from '../lib/api';
 import { useAuth, useTheme, useToast } from '../lib/context.jsx';
 import Sheet from '../components/Sheet.jsx';
 import Avatar from '../components/Avatar.jsx';
 
 const THEMES = [
-  { id: 'light', label: 'Light', icon: Sun },
-  { id: 'dark', label: 'Dark', icon: Moon },
-  { id: 'system', label: 'System', icon: Monitor },
+  { id: 'aurora', label: 'Obsidian Aurora', subtitle: 'Cosmic violet void with celestial luminescence', icon: Sparkles, preview: 'linear-gradient(135deg, #090a10 0%, #1e113a 60%, #06b6d4 100%)' },
+  { id: 'solar', label: 'Solar Alabaster', subtitle: 'Warm luxury editorial with sunset amber & cream', icon: Sun, preview: 'linear-gradient(135deg, #f7f4ed 0%, #fed7aa 60%, #ea580c 100%)' },
+  { id: 'cyber', label: 'Cyber Neon', subtitle: 'Ultra-contrast pitch space with neon cyan & magenta', icon: Zap, preview: 'linear-gradient(135deg, #040407 0%, #00f0ff 60%, #ff007a 100%)' },
+  { id: 'system', label: 'System Default', subtitle: 'Sync automatically with OS light/dark mode', icon: Monitor, preview: 'linear-gradient(135deg, #1e293b 0%, #64748b 100%)' },
 ];
 
 export default function Settings() {
@@ -156,13 +157,30 @@ export default function Settings() {
 
       {/* Appearance */}
       <section className="card settings__section" aria-labelledby="s-appearance">
-        <h2 id="s-appearance" className="section-title">Appearance</h2>
-        <div className="segmented segmented--wide" role="radiogroup" aria-label="Theme">
-          {THEMES.map(({ id, label, icon: Icon }) => (
-            <button key={id} role="radio" aria-checked={theme === id} className={theme === id ? 'is-on' : ''} onClick={() => setTheme(id)}>
-              <Icon size={16} /> {label}
-            </button>
-          ))}
+        <h2 id="s-appearance" className="section-title">AURA Themes & Atmosphere</h2>
+        <p className="muted small" style={{ marginBottom: 14 }}>Choose your personalized visual atmosphere and color identity.</p>
+        <div className="theme-grid" role="radiogroup" aria-label="Aura Theme">
+          {THEMES.map(({ id, label, subtitle, icon: Icon, preview }) => {
+            const active = theme === id || (id === 'aurora' && (theme === 'dark' || !theme)) || (id === 'solar' && theme === 'light');
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                className={`theme-card${active ? ' is-active' : ''}`}
+                onClick={() => setTheme(id)}
+              >
+                <div className="theme-card__preview" style={{ background: preview }} />
+                <div className="theme-card__info">
+                  <span className="theme-card__title strong">
+                    <Icon size={16} /> {label}
+                  </span>
+                  <span className="theme-card__desc muted small">{subtitle}</span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </section>
 

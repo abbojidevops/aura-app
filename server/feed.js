@@ -253,7 +253,7 @@ async function rank(rows, me, settings) {
     }
     // Mood: fit with the chosen mode.
     if (moodHits.length) {
-      score += 2.5;
+      score += 4.5;
       reasons.push(`Fits your ${mood.label} mode`);
     }
     if (mood === MOODS.trending) score += Math.log10(1 + row.like_count) * 2;

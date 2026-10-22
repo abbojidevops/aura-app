@@ -17,13 +17,16 @@ export function AppProviders({ children }) {
 }
 
 function ThemeProvider({ children }) {
-  const [theme, setThemeState] = useState(() => localStorage.getItem('aura-theme') || 'system');
+  const [theme, setThemeState] = useState(() => localStorage.getItem('aura-theme') || 'aurora');
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const apply = () => {
-      const dark = theme === 'dark' || (theme === 'system' && mq.matches);
-      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      let active = theme;
+      if (theme === 'system') active = mq.matches ? 'aurora' : 'solar';
+      else if (theme === 'dark') active = 'aurora';
+      else if (theme === 'light') active = 'solar';
+      document.documentElement.dataset.theme = active;
     };
     apply();
     mq.addEventListener('change', apply);

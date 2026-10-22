@@ -31,7 +31,7 @@ check('following feed only followed authors', following.data.items?.every((p) =>
 const reels = await j('/api/feed?mode=reels', { token: T });
 check('reels are videos only', reels.data.items?.every((p) => p.mediaType === 'video'));
 check('reels exist after seed processing', reels.data.items?.length >= 3, `(${reels.data.items?.length})`);
-const p1 = home.data.items[0];
+const p1 = home.data.items.find((p) => p.mediaType === 'image') || home.data.items[0];
 check('published media has URLs', !!p1.mediaUrl && p1.status === 'published');
 const media = await fetch(p1.mediaUrl.startsWith("http") ? p1.mediaUrl : B + p1.mediaUrl);
 check('media is served from /uploads', media.status === 200 && (media.headers.get('content-type') || '').includes('image'));

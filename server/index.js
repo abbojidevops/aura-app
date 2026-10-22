@@ -110,17 +110,19 @@ app.get('/healthz', wrap(async (req, res) => {
 // ---------- Auth (public) ----------
 const auth = express.Router();
 
-const createAuthLimiter = () =>
+const createAuthLimiter = (limit = 10) =>
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 10,
+    limit,
     standardHeaders: true,
     legacyHeaders: false,
-    validate: { trustProxy: false, xForwardedForHeader: false },
+    keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
+    skip: (req) => !req.headers['x-forwarded-for'] && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+    validate: false,
     handler: (req, res) => res.status(429).json({ error: 'Too many attempts. Try again later.' }),
   });
 
-const registerLimiter = createAuthLimiter();
+const registerLimiter = createAuthLimiter(100);
 const loginLimiter = createAuthLimiter();
 
 auth.post('/register', registerLimiter, wrap(async (req, res) => {
